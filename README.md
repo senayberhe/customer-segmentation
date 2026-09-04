@@ -50,6 +50,18 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 
 ---
 
+## Visualizations
+
+**Customer segments in PCA space** — the 4 clusters KMeans discovers, projected onto the top 2 principal components:
+
+![Customer segments plotted in PCA space, colored by segment: well-off, career-focused, fewer-opportunities, standard](docs/images/segments_pca_scatter.png)
+
+**Why 3 PCA components** — cumulative explained variance flattens out after the 3rd component (80.8%), which is why the pipeline retains 3:
+
+![Cumulative explained variance by number of PCA components, showing 80.8% at 3 components](docs/images/pca_explained_variance.png)
+
+---
+
 ## ML Pipeline
 
 ```
@@ -74,6 +86,8 @@ Raw demographic + purchase data
 
 ```
 customer_segmentation/
+│
+├── docs/images/                    # Charts embedded in this README
 │
 ├── data/                          # Raw input datasets
 │   ├── segmentation+data.csv      # 2,000 customers × 8 demographic features
