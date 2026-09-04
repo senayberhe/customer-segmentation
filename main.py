@@ -54,6 +54,15 @@ def run_purchase_behavior() -> None:
     print(f"  Brands: {list(brand_choice.classes_)}")
     print(f"  Mean historical prices: {brand_choice.mean_prices_}")
 
+    print("\n  Checking whether each brand's own-price coefficient is statistically")
+    print("  significant (bootstrapped 95% CI) rather than trusting point estimates...")
+    for brand in brand_choice.classes_:
+        est = brand_choice.bootstrap_own_price_significance(
+            int(brand), occasions, n_boot=40, random_state=42
+        )
+        flag = "significant" if est.is_significant else "NOT significant — don't trust the sign"
+        print(f"    Brand {brand}: coef≈{est.mean:>6.3f}  CI=[{est.ci_low:>6.3f}, {est.ci_high:>6.3f}]  {flag}")
+
     print("\nFitting purchase quantity model (units bought vs. price)...")
     quantity = PurchaseQuantityModel().fit(occasions)
     predicted_qty = quantity.predict(sample_prices)

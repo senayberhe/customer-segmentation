@@ -26,11 +26,11 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 | **Unsupervised ML** | Applied PCA for dimensionality reduction and KMeans clustering to discover meaningful customer groups |
 | **Supervised predictive modeling** | Logistic regression for purchase propensity and multinomial brand choice; linear regression for purchase quantity — each with a price-elasticity method |
 | **Feature engineering** | Selected and scaled 7 demographic features; reasoned about ordinal vs continuous encoding; engineered price/promotion incidence features for the purchase models |
-| **Statistical thinking** | Used explained variance analysis to justify retaining 3 PCA components (80.8% variance captured); derived price elasticities from fitted regression coefficients and flagged a counter-intuitive coefficient sign for further investigation rather than accepting it uncritically |
+| **Statistical thinking** | Used explained variance analysis to justify retaining 3 PCA components (80.8% variance captured); when one brand's price coefficient came back counter-intuitively positive, bootstrapped a confidence interval instead of trusting the point estimate — confirmed it wasn't statistically distinguishable from zero and diagnosed why (small sample, low own-price variance, correlated competitor prices) |
 | **Software engineering** | Structured code as a reusable Python package (`src/` layout) with clear separation of concerns across two pipelines |
 | **API design** | Designed `SegmentationPipeline`, `PurchasePropensityModel`, `BrandChoiceModel`, and `PurchaseQuantityModel` classes with a consistent sklearn-style interface (`fit`, `predict`/`predict_proba`) |
 | **Model persistence** | Implemented `save()` / `load()` on every model with proper serialisation so models can be deployed without retraining |
-| **Testing** | Wrote 52 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), and round-trip persistence |
+| **Testing** | Wrote 57 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), and round-trip persistence |
 | **Exploratory analysis** | Three Jupyter notebooks documenting EDA, predictive analysis, and purchase behaviour deep-dives |
 
 ---
@@ -78,11 +78,11 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 
 ![Purchase probability and predicted quantity both declining as price increases](docs/images/purchase_probability_quantity.png)
 
-**Brand choice under price competition** — each brand's probability of being chosen as its own price rises, holding competitors' prices at their historical average:
+**Brand choice under price competition** — each brand's probability of being chosen as its own price rises, holding competitors' prices at their historical average. Brand 3 is dashed because its price effect isn't statistically distinguishable from noise (see below):
 
-![Brand choice probability declining with own price for four of five brands](docs/images/brand_choice_elasticity.png)
+![Brand choice probability declining with own price for four of five brands; Brand 3 shown dashed as not statistically significant](docs/images/brand_choice_elasticity.png)
 
-> **Note on Brand 3:** every brand's choice probability falls with its own price *except* Brand 3, whose fitted coefficient is slightly positive. I checked this wasn't a bug in the elasticity code (it isn't — the raw sklearn coefficient itself is `+0.50`) before shipping the chart. Brand 3 has the smallest market share in the data (5.7% of purchases), which likely limits how well the model can identify a clean price effect for it. Flagging this rather than smoothing it over is deliberate — a good next step would be a regularised or hierarchical model that pools information across brands.
+> **On Brand 3's flat/rising curve — quantified, not just eyeballed.** The raw fitted coefficient for Brand 3 is `+0.43`, the only positive one among the five brands. Rather than trust or dismiss a single point estimate, `BrandChoiceModel.bootstrap_own_price_significance()` refits the model on 150 bootstrap resamples of the data and reports a confidence interval: Brand 3's is **[-0.29, +1.33]** — it crosses zero, so the sign can't be trusted. Every other brand's interval is comfortably negative and significant (e.g. Brand 1: [-4.27, -3.37]). The likely cause: Brand 3 has the smallest market share (5.7% of purchases) and the least own-price variation of any brand (std $0.046, a $1.87–$2.14 range), so there's little signal to separate its price effect from its correlation with Brand 4's and Brand 5's prices (r = 0.42 and 0.20). The chart reflects this honestly instead of hiding it or forcing the number to look "correct."
 
 ---
 
@@ -151,7 +151,7 @@ customer_segmentation/
 │
 ├── tests/
 │   ├── test_segmentation.py       # 30 tests
-│   └── test_purchase_behavior.py  # 22 tests — 52 total, 100% passing
+│   └── test_purchase_behavior.py  # 27 tests — 57 total, 100% passing
 │
 ├── main.py                        # Runnable pipeline entry point
 └── pyproject.toml                 # Dependency management (uv)
@@ -210,6 +210,20 @@ model.predict_proba([1.0, 2.5])     # [0.776, 0.093]  — P(purchase) at each pr
 model.price_elasticity([1.0, 2.5])  # [-0.53, -5.33]  — demand grows more elastic as price rises
 ```
 
+**Not trusting a coefficient just because it fit — quantifying uncertainty**
+```python
+from src.customer_segmentation import BrandChoiceModel, load_purchase_data
+
+df = load_purchase_data()
+occasions = df[df["Incidence"] == 1]
+brand_model = BrandChoiceModel().fit(occasions)
+
+est = brand_model.bootstrap_own_price_significance(brand=3, purchase_occasions=occasions)
+est.mean, est.ci_low, est.ci_high, est.is_significant
+# (0.43, -0.29, 1.33, False)  — the CI crosses zero, so this brand's
+# apparent positive price coefficient can't actually be trusted
+```
+
 ---
 
 ## Testing Philosophy
@@ -220,12 +234,13 @@ I treat tests as a first-class concern, not an afterthought. The test suite vali
 - **Guard rails** — clear errors if any model is used before fitting
 - **Correctness** — label counts, array shapes, explained variance bounds, probabilities summing to 1
 - **Economic sanity** — purchase probability and quantity both fall as price rises (the direction a real elasticity should have)
+- **Statistical honesty** — a bootstrapped confidence interval, not just a point estimate, is available before trusting a coefficient's sign
 - **Reproducibility** — `fit_predict` and `fit` → `predict` give identical results
 - **Persistence** — saved and loaded models produce identical predictions
 
 ```bash
 pytest tests/ -v
-# 52 passed in 0.87s
+# 57 passed in 1.41s
 ```
 
 ---

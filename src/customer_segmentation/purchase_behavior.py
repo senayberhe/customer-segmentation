@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,21 @@ _DEFAULT_MODELS_DIR = Path(__file__).parents[2] / "models"
 
 PRICE_COLUMNS = [f"Price_{i}" for i in range(1, 6)]
 PROMOTION_COLUMNS = [f"Promotion_{i}" for i in range(1, 6)]
+
+
+class CoefficientEstimate(NamedTuple):
+    """A bootstrapped own-price coefficient estimate for one brand."""
+
+    brand: int
+    mean: float
+    ci_low: float
+    ci_high: float
+
+    @property
+    def is_significant(self) -> bool:
+        """False if the 95% CI crosses zero — the sign/magnitude can't be
+        trusted, regardless of what the point estimate looks like."""
+        return not (self.ci_low < 0 < self.ci_high)
 
 
 class PurchasePropensityModel:
@@ -143,6 +159,47 @@ class BrandChoiceModel:
         own_proba = proba[:, class_idx]
         beta_own = self.model.coef_[class_idx, brand - 1]
         return beta_own * price_range * (1 - own_proba)
+
+    def bootstrap_own_price_significance(
+        self,
+        brand: int,
+        purchase_occasions: pd.DataFrame,
+        n_boot: int = 300,
+        ci: float = 0.95,
+        random_state: int | None = None,
+    ) -> CoefficientEstimate:
+        """Bootstrap a confidence interval for `brand`'s own-price coefficient.
+
+        A single point estimate from `own_price_elasticity` can look like a
+        real effect even when the data can't actually support it — this is
+        especially likely for a low-share brand with correlated competitor
+        prices. Resamples `purchase_occasions` with replacement, refits on
+        each resample, and reports whether the resulting CI excludes zero.
+        If it doesn't, the coefficient's sign shouldn't be trusted.
+
+        `purchase_occasions` should be the same data (or a fresh sample of
+        the same population) used for `fit`.
+        """
+        self._check_fitted()
+        rng = np.random.default_rng(random_state)
+        n = len(purchase_occasions)
+
+        coefs = []
+        for _ in range(n_boot):
+            sample = purchase_occasions.iloc[rng.integers(0, n, n)]
+            if sample["Brand"].nunique() < len(self.classes_):
+                continue
+            model = LogisticRegression(solver="lbfgs", max_iter=5000)
+            model.fit(sample[PRICE_COLUMNS], sample["Brand"])
+            if brand not in model.classes_:
+                continue
+            resample_idx = list(model.classes_).index(brand)
+            coefs.append(model.coef_[resample_idx, brand - 1])
+
+        coefs = np.array(coefs)
+        alpha = (1 - ci) / 2 * 100
+        lo, hi = np.percentile(coefs, [alpha, 100 - alpha])
+        return CoefficientEstimate(brand=brand, mean=coefs.mean(), ci_low=lo, ci_high=hi)
 
     def save(self, directory: str | Path | None = None) -> Path:
         self._check_fitted()

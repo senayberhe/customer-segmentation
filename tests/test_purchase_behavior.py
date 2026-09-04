@@ -8,6 +8,7 @@ from src.customer_segmentation.purchase_behavior import (
     PRICE_COLUMNS,
     PROMOTION_COLUMNS,
     BrandChoiceModel,
+    CoefficientEstimate,
     PurchasePropensityModel,
     PurchaseQuantityModel,
 )
@@ -153,6 +154,39 @@ class TestBrandChoiceModel:
         np.testing.assert_array_almost_equal(
             loaded.predict_proba(purchase_occasions.head(5)), original
         )
+
+    def test_bootstrap_significance_raises_before_fit(self, purchase_occasions):
+        model = BrandChoiceModel()
+        with pytest.raises(RuntimeError):
+            model.bootstrap_own_price_significance(1, purchase_occasions, n_boot=5)
+
+    def test_bootstrap_significance_ci_is_well_formed(self, purchase_occasions):
+        model = BrandChoiceModel().fit(purchase_occasions)
+        est = model.bootstrap_own_price_significance(
+            1, purchase_occasions, n_boot=20, random_state=0
+        )
+        assert isinstance(est, CoefficientEstimate)
+        assert est.brand == 1
+        assert est.ci_low <= est.mean <= est.ci_high
+
+    def test_bootstrap_significance_detects_strong_effect(self, purchase_occasions):
+        # Brand 1 has the steepest, most consistent price effect in the
+        # synthetic fixture — its CI should not cross zero.
+        model = BrandChoiceModel().fit(purchase_occasions)
+        est = model.bootstrap_own_price_significance(
+            1, purchase_occasions, n_boot=30, random_state=0
+        )
+        assert est.is_significant
+
+
+class TestCoefficientEstimate:
+    def test_significant_when_ci_excludes_zero(self):
+        est = CoefficientEstimate(brand=1, mean=-2.0, ci_low=-2.5, ci_high=-1.5)
+        assert est.is_significant is True
+
+    def test_not_significant_when_ci_crosses_zero(self):
+        est = CoefficientEstimate(brand=3, mean=0.4, ci_low=-0.3, ci_high=1.3)
+        assert est.is_significant is False
 
 
 # ---------------------------------------------------------------------------
