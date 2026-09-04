@@ -131,7 +131,7 @@ X = df[SEGMENTATION_FEATURES]
 pipeline = SegmentationPipeline(n_components=3, n_clusters=4)
 labels = pipeline.fit_predict(X)
 
-print(pipeline.segment_summary(X)["mean"])   # per-segment feature means
+print(pipeline.segment_summary(X).xs("mean", axis=1, level=1))   # per-segment feature means
 print(pipeline.explained_variance())          # [0.357, 0.263, 0.188]
 ```
 
@@ -169,4 +169,3 @@ pytest tests/ -v
 ---
 
 *Thanks for taking the time to look at my work. I'd love to discuss the decisions I made and how I'd extend this further.*
-# customer-segemantation

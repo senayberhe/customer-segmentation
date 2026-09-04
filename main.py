@@ -22,7 +22,7 @@ def main() -> None:
 
     print("\nSegment summary (feature means):")
     summary = pipeline.segment_summary(X)
-    print(summary["mean"].to_string())
+    print(summary.xs("mean", axis=1, level=1).to_string())
 
     print("\nSaving models...")
     saved_to = pipeline.save()
