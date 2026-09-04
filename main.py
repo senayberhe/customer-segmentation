@@ -1,13 +1,19 @@
-"""Entry point for the customer segmentation pipeline."""
+"""Entry point for the customer segmentation and purchase-behavior pipelines."""
+
+import numpy as np
 
 from src.customer_segmentation import (
+    BrandChoiceModel,
+    PurchasePropensityModel,
+    PurchaseQuantityModel,
     SegmentationPipeline,
+    load_purchase_data,
     load_segmentation_data,
 )
 from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
 
 
-def main() -> None:
+def run_segmentation() -> None:
     print("Loading data...")
     df = load_segmentation_data()
 
@@ -27,6 +33,43 @@ def main() -> None:
     print("\nSaving models...")
     saved_to = pipeline.save()
     print(f"Models saved to: {saved_to}")
+
+
+def run_purchase_behavior() -> None:
+    print("\nLoading purchase-occasion data...")
+    df = load_purchase_data()
+    occasions = df[df["Incidence"] == 1]
+
+    print("Fitting purchase propensity model (P(purchase) vs. price)...")
+    propensity = PurchasePropensityModel().fit(df)
+    sample_prices = np.array([1.0, 1.5, 2.0, 2.5])
+    proba = propensity.predict_proba(sample_prices)
+    elasticity = propensity.price_elasticity(sample_prices)
+    print("  Price   P(purchase)   Elasticity")
+    for p, pr, el in zip(sample_prices, proba, elasticity):
+        print(f"  {p:>5.2f}   {pr:>11.3f}   {el:>10.3f}")
+
+    print("\nFitting brand choice model (which brand is chosen)...")
+    brand_choice = BrandChoiceModel().fit(occasions)
+    print(f"  Brands: {list(brand_choice.classes_)}")
+    print(f"  Mean historical prices: {brand_choice.mean_prices_}")
+
+    print("\nFitting purchase quantity model (units bought vs. price)...")
+    quantity = PurchaseQuantityModel().fit(occasions)
+    predicted_qty = quantity.predict(sample_prices)
+    print("  Price   Predicted quantity")
+    for p, q in zip(sample_prices, predicted_qty):
+        print(f"  {p:>5.2f}   {q:>17.2f}")
+
+    print("\nSaving models...")
+    for model in (propensity, brand_choice, quantity):
+        saved_to = model.save()
+        print(f"  {model.__class__.__name__} saved to: {saved_to}")
+
+
+def main() -> None:
+    run_segmentation()
+    run_purchase_behavior()
 
 
 if __name__ == "__main__":
