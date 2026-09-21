@@ -1,40 +1,33 @@
-# Customer Segmentation — Data Science Portfolio Project
+# Customer Segmentation and Purchase Behavior
 
 **By Senay Berhe** · [tsionberhe@gmail.com](mailto:tsionberhe@gmail.com)
 
-> An end-to-end machine learning project demonstrating skills in exploratory data analysis, unsupervised clustering, supervised predictive modeling, dimensionality reduction, software engineering best practices, and production-ready code design.
+> Who are my customers, and how do they shop? Unsupervised segmentation (PCA + KMeans) joined to supervised purchase-behavior models, evaluated on held-out customers — with the weak spots reported, not hidden. A tested Python package, not just notebooks.
 
 ---
 
-## Project Overview
+## Key Findings
 
-This project builds a complete customer analytics system from raw retail data, combining two complementary ML pipelines:
+1. **Habit beats price.** Adding a shopper's purchase history (recency and last brand) lifts brand-choice accuracy from 38.5% to 72.9% and purchase ROC AUC from 0.54 to 0.68 on customers the model never saw.
+2. **Segments predict brand choice.** Each of the four segments has its own favourite brand (63%, 58%, 63% of purchases for three of them); adding the segment alone lifts brand accuracy from 38.5% to 57.1%, and it still helps new shoppers with no history (45% → 54%).
+3. **Price is a real but weak predictor.** Alone it barely beats chance for whether a trip ends in a purchase (ROC AUC 0.537) and explains ~4% of purchase quantity. The price curves also extrapolate: observed average prices only span $1.87–$2.10.
+4. **Price sensitivity differs by segment, with wide error bars.** Well-off shoppers are the least price-sensitive and fewer-opportunities shoppers the most; only that gap is clear-cut once uncertainty (a customer-level bootstrap) is counted.
+5. **k=4 is a practical choice, not one the data forces.** Silhouette scores are ~0.34 for every k and segment stability is moderate (adjusted Rand index 0.64), so segment membership is best treated as a soft label.
 
-1. **Segmentation** — unsupervised PCA + KMeans on demographic data, discovering four distinct customer segments.
-2. **Purchase behavior prediction** — supervised models that predict *how customers react* to price and promotions: the probability they purchase at all, which of five brands they choose, and how many units they buy.
-
-Together these answer both "who are my customers?" and "how will they respond if I change price?" — insight a business could directly use to personalise marketing, run promotions, and set prices.
-
-The project goes beyond a notebook prototype: it is structured as a proper Python package with a clean API, model persistence, and a full test suite.
+Details, charts and caveats for each are below. Everything reproduces with `uv sync && uv run python main.py`.
 
 ---
 
-## Skills Demonstrated
+## Overview
 
-| Area | What I did |
-|---|---|
-| **Unsupervised ML** | Applied PCA for dimensionality reduction and KMeans clustering to discover meaningful customer groups |
-| **Supervised predictive modeling** | Logistic regression for purchase propensity and multinomial brand choice; linear regression for purchase quantity — each with a price-elasticity method |
-| **Feature engineering** | Selected and scaled 7 demographic features; reasoned about ordinal vs continuous encoding; engineered price/promotion incidence features for the purchase models |
-| **Statistical thinking** | Used explained variance analysis to justify retaining 3 PCA components (80.8% variance captured); when one brand's price coefficient came back counter-intuitively positive, bootstrapped a confidence interval instead of trusting the point estimate — confirmed it wasn't statistically distinguishable from zero and diagnosed why (small sample, low own-price variance, correlated competitor prices) |
-| **Software engineering** | Structured code as a reusable Python package (`src/` layout) with clear separation of concerns across two pipelines |
-| **API design** | Designed `SegmentationPipeline`, `PurchasePropensityModel`, `BrandChoiceModel`, and `PurchaseQuantityModel` classes with a consistent sklearn-style interface (`fit`, `predict`/`predict_proba`) |
-| **Model persistence** | Implemented `save()` / `load()` on every model with proper serialisation so models can be deployed without retraining |
-| **Feature engineering for prediction** | Built leak-free purchase-history features (recency, last brand) and showed on held-out customers that they lift brand accuracy from 38.5% to 72.9% and purchase ROC AUC from 0.54 to 0.68 — and reported that the recency effect runs opposite to the restocking story one might assume |
-| **Joining models & uncertainty** | Connected the segmentation and purchase pipelines: per-segment price elasticities with a customer-level (cluster) bootstrap, and showed segments lift held-out brand-choice accuracy from 38.5% to 57.1% |
-| **Model evaluation** | Scored every supervised model on held-out customers (5-fold CV grouped by customer ID, so no shopper appears in both train and test) against a naive baseline; validated the choice of k with silhouette, Davies-Bouldin and bootstrap stability — and reported plainly where the models are weak |
-| **Testing** | Wrote 136 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), evaluation and feature leakage checks, and round-trip persistence |
-| **Exploratory analysis** | Three Jupyter notebooks documenting EDA, predictive analysis, and purchase behaviour deep-dives |
+The project combines two pipelines built from raw retail data:
+
+1. **Segmentation** — PCA + KMeans on demographics, discovering four customer segments.
+2. **Purchase behavior** — models for whether a shopper buys, which of five brands they choose, and how many units, each with a price-elasticity method.
+
+`segment_behavior.py` joins them (per-segment price response) and `history.py` adds leak-free purchase-history features. It is structured as an installable package with a consistent sklearn-style API (`fit`, `predict`, `save`/`load`), CI on Python 3.10 and 3.13, and 138 tests.
+
+**Skills shown:** unsupervised learning and cluster validation · held-out evaluation with customer-grouped cross-validation · leak-free feature engineering · uncertainty quantification (cluster bootstrap) · careful reporting of negative and ambiguous results · package design, testing and reproducibility.
 
 ---
 
@@ -272,9 +265,9 @@ customer_segmentation/
 │   ├── conftest.py                # Shared synthetic purchase-data fixtures
 │   ├── test_segmentation.py       # 30 tests
 │   ├── test_purchase_behavior.py  # 27 tests
-│   ├── test_evaluation.py         # 28 tests
+│   ├── test_evaluation.py         # 30 tests
 │   ├── test_segment_behavior.py   # 27 tests
-│   └── test_history.py            # 24 tests — 136 total, 100% passing
+│   └── test_history.py            # 24 tests — 138 total, 100% passing
 │
 ├── scripts/
 │   └── make_evaluation_figures.py # Regenerates the evaluation charts
@@ -385,7 +378,7 @@ I treat tests as a first-class concern, not an afterthought. The test suite vali
 
 ```bash
 pytest tests/ -v
-# 136 passed
+# 138 passed
 ```
 
 ---
