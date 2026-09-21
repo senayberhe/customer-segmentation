@@ -14,6 +14,16 @@ from sklearn.preprocessing import StandardScaler
 
 _DEFAULT_MODELS_DIR = Path(__file__).parents[2] / "models"
 
+# Names for the segments the default pipeline (k=4, random_state=42) finds,
+# read off each segment's demographic profile. KMeans label numbers are
+# arbitrary, so these only apply to the saved pipeline / that configuration.
+SEGMENT_NAMES = {
+    0: "standard",
+    1: "fewer-opportunities",
+    2: "career-focused",
+    3: "well-off",
+}
+
 
 class SegmentationPipeline:
     """End-to-end pipeline for customer segmentation via PCA + KMeans.

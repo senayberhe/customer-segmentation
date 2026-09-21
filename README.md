@@ -30,8 +30,9 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 | **Software engineering** | Structured code as a reusable Python package (`src/` layout) with clear separation of concerns across two pipelines |
 | **API design** | Designed `SegmentationPipeline`, `PurchasePropensityModel`, `BrandChoiceModel`, and `PurchaseQuantityModel` classes with a consistent sklearn-style interface (`fit`, `predict`/`predict_proba`) |
 | **Model persistence** | Implemented `save()` / `load()` on every model with proper serialisation so models can be deployed without retraining |
+| **Joining models & uncertainty** | Connected the segmentation and purchase pipelines: per-segment price elasticities with a customer-level (cluster) bootstrap, and showed segments lift held-out brand-choice accuracy from 38.6% to 57.4% |
 | **Model evaluation** | Scored every supervised model on held-out customers (5-fold CV grouped by customer ID, so no shopper appears in both train and test) against a naive baseline; validated the choice of k with silhouette, Davies-Bouldin and bootstrap stability — and reported plainly where the models are weak |
-| **Testing** | Wrote 85 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), evaluation leakage checks, and round-trip persistence |
+| **Testing** | Wrote 112 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), evaluation leakage checks, and round-trip persistence |
 | **Exploratory analysis** | Three Jupyter notebooks documenting EDA, predictive analysis, and purchase behaviour deep-dives |
 
 ---
@@ -105,7 +106,7 @@ Fitting a model and plotting its curve doesn't show it predicts anything. Every 
 | Brand choice | Accuracy | 0.386 | 0.338 | Real but modest lift; log loss 1.409 vs 1.445 |
 | Quantity | R² | 0.033 | −0.010 | Tiny; the gain is within fold-to-fold noise (±0.036) |
 
-**What this means.** Price is a genuine driver of *which brand* a shopper picks, but average price alone says almost nothing about *whether a given trip ends in a purchase* or *how many units*. The elasticity estimates are useful for describing direction and relative sensitivity between brands; they are not good enough to forecast individual purchases. Better predictors would need customer history (days since last purchase, previous brand and quantity, promotion exposure), which the data contains and the current models don't use — that's the obvious next step.
+**What this means.** Price is a genuine driver of *which brand* a shopper picks, but average price alone says almost nothing about *whether a given trip ends in a purchase* or *how many units*. The elasticity estimates are useful for describing direction and relative sensitivity between brands; they are not good enough to forecast individual purchases. Price alone is a weak predictor, but *who the shopper is* is not — see the next section, where adding the customer segment lifts brand-choice accuracy from 38.6% to 57.4%. Purchase history (days since last purchase, previous brand and quantity) is in the data too and isn't used yet.
 
 ### Is k=4 the right number of segments?
 
@@ -124,6 +125,48 @@ Being upfront about this: **the data doesn't single out k=4.** The elbow bends a
 Segment stability backs that up only partly: refitting on 30 bootstrap resamples and comparing with the full-data segments gives an adjusted Rand index of **0.64 on average (worst case 0.50)**. The segments are recognisably the same groups most of the time, but individual customers near a boundary do move between them, so treat segment membership as a soft label.
 
 Reproduce everything above with `python main.py` (prints the tables) and `python -m scripts.make_evaluation_figures` (regenerates the charts).
+
+---
+
+## Connecting the Two Pipelines: Segments and Price Response
+
+The segmentation and purchase-behavior pipelines are joined by `segment_behavior.py`: the fitted `SegmentationPipeline` assigns each of the 500 shoppers in the purchase data to a segment from their demographics (these are different people from the 2,000 the segments were learned on, so this also checks that the segments carry over to new customers), and then price response is estimated per segment.
+
+### Each segment has its own favourite brand
+
+![Share of purchases going to each brand, per segment](docs/images/segment_brand_shares.png)
+
+Standard shoppers buy Brand 5 63% of the time, fewer-opportunities shoppers buy Brand 2 58%, and well-off shoppers buy Brand 4 63%. This is where segmentation earns its keep. On held-out customers (5-fold CV grouped by customer), adding the segment to the models:
+
+| Model | Metric | Price only | + Segment |
+|---|---|---|---|
+| Brand choice | Accuracy | 0.386 | **0.574** |
+| Brand choice | Log loss | 1.409 | **1.148** |
+| Propensity | ROC AUC | 0.537 | 0.569 |
+| Propensity | Log loss | 0.561 | 0.557 |
+
+Brand choice improves a lot; whether a trip ends in a purchase improves only a little.
+
+### Price sensitivity differs by segment
+
+![Price elasticity of purchase probability and of quantity, by segment, with 95% confidence intervals](docs/images/segment_elasticity.png)
+
+*Elasticity at the average observed price ($2.00). Intervals come from a **customer-level** bootstrap (200 resamples of whole shoppers, not trips — one person's ~117 trips are strongly correlated, so resampling trips would understate the uncertainty).*
+
+| Segment | Customers | Purchase-probability elasticity | Quantity elasticity |
+|---|---|---|---|
+| Fewer-opportunities | 181 | −4.22 [−5.37, −3.12] | −0.73 [−0.89, −0.53] |
+| Standard | 145 | −3.55 [−4.76, −2.50] | −0.47 [−0.61, −0.31] |
+| Career-focused | 76 | −2.63 [−4.20, −0.73] | −0.55 [−1.00, +0.10] |
+| Well-off | 98 | −2.00 [−3.02, −0.56] | −0.19 [−0.73, +0.40] |
+
+What the intervals do and don't support:
+- **Well-off shoppers are less price-sensitive than fewer-opportunities shoppers** when deciding whether to buy (difference +2.2, 95% CI [+0.8, +4.0]). Versus standard shoppers the gap is borderline (+1.6, CI [+0.0, +3.0]).
+- **Fewer-opportunities shoppers also cut quantity more than standard shoppers** when price rises, but only just (difference −0.26, CI [−0.45, −0.02]).
+- **Career-focused and well-off quantity elasticities aren't distinguishable from zero**, and neither can be told apart from the other segments'. With only 76 and 98 shoppers, the data can't say more.
+- **Don't over-read the pairs.** Across all 12 pairwise comparisons (6 segment pairs × 2 metrics) only three intervals exclude zero, and two of those barely do. With that many comparisons, one or two would look significant by chance alone; the well-off vs fewer-opportunities purchase-probability gap is the one that stands out.
+
+**Caveats.** These are observational estimates: every shopper faces the same shelf prices on a given day, so price effects are entangled with anything else that varies by day (seasonality, store events). Segments contain 76–181 shoppers each, hence the wide intervals. And since price explains little of individual purchase decisions overall (see above), read these as a comparison of *relative* sensitivity between segments, not as forecasts.
 
 ---
 
@@ -189,13 +232,15 @@ customer_segmentation/
 │   ├── data_loader.py             # Clean data ingestion with defaults
 │   ├── segmentation.py            # SegmentationPipeline class
 │   ├── purchase_behavior.py       # Purchase propensity, brand choice, quantity models
-│   └── evaluation.py              # Customer-grouped splits and cross-validation
+│   ├── evaluation.py              # Customer-grouped splits and cross-validation
+│   └── segment_behavior.py        # Per-segment price response (joins the two pipelines)
 │
 ├── tests/
 │   ├── conftest.py                # Shared synthetic purchase-data fixtures
 │   ├── test_segmentation.py       # 30 tests
 │   ├── test_purchase_behavior.py  # 27 tests
-│   └── test_evaluation.py         # 28 tests — 85 total, 100% passing
+│   ├── test_evaluation.py         # 28 tests
+│   └── test_segment_behavior.py   # 27 tests — 112 total, 100% passing
 │
 ├── scripts/
 │   └── make_evaluation_figures.py # Regenerates the evaluation charts
@@ -282,13 +327,14 @@ I treat tests as a first-class concern, not an afterthought. The test suite vali
 - **Correctness** — label counts, array shapes, explained variance bounds, probabilities summing to 1
 - **Economic sanity** — purchase probability and quantity both fall as price rises (the direction a real elasticity should have)
 - **Statistical honesty** — a bootstrapped confidence interval, not just a point estimate, is available before trusting a coefficient's sign
+- **Segment analysis** — assignment is constant within a shopper, designed segment differences are recovered, and a synthetic check confirms the segment feature lifts held-out brand accuracy
 - **Evaluation integrity** — train and test folds never share a customer; models are compared against a baseline; a model fit on shuffled targets can't beat the mean
 - **Reproducibility** — `fit_predict` and `fit` → `predict` give identical results
 - **Persistence** — saved and loaded models produce identical predictions
 
 ```bash
 pytest tests/ -v
-# 85 passed
+# 112 passed
 ```
 
 ---

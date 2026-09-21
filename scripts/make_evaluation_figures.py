@@ -7,6 +7,7 @@ Run from the project root:  python -m scripts.make_evaluation_figures
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -21,10 +22,17 @@ from src.customer_segmentation import (
 )
 from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
 from src.customer_segmentation.evaluation import cross_validate_by_customer
+from src.customer_segmentation.segment_behavior import (
+    assign_segments,
+    brand_shares_by_segment,
+    segment_price_response,
+)
+from src.customer_segmentation.segmentation import SEGMENT_NAMES
 
 OUT = Path(__file__).parents[1] / "docs" / "images"
 SURFACE, INK, MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e6e5e1"
 MODEL, BASELINE = "#2a78d6", "#8a8983"
+BRAND_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]  # categorical slots 1-5, fixed order
 
 plt.rcParams.update({
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
@@ -99,6 +107,76 @@ def heldout_chart() -> None:
     plt.close(fig)
 
 
+def segment_charts() -> None:
+    df = load_purchase_data()
+    df["Segment"] = assign_segments(df, SegmentationPipeline.load())
+    label = lambda seg: f"{SEGMENT_NAMES[seg]}\n(segment {seg})"
+
+    # --- brand share by segment: 100% stacked bars, one row per segment
+    shares = brand_shares_by_segment(df)
+    print("\n== Brand share by segment ==")
+    print(shares.round(2))
+    fig, ax = plt.subplots(figsize=(9, 3.4))
+    order = list(shares.index)[::-1]
+    left = {seg: 0.0 for seg in order}
+    for j, brand in enumerate(shares.columns):
+        for seg in order:
+            share = shares.loc[seg, brand]
+            ax.barh(label(seg), share, left=left[seg], color=BRAND_COLORS[j], height=0.62,
+                    edgecolor=SURFACE, linewidth=2, label=f"Brand {brand}" if seg == order[0] else None)
+            if share >= 0.10:
+                ax.text(left[seg] + share / 2, label(seg), f"{share:.0%}", ha="center", va="center",
+                        color="#0b0b0b" if j in (3, 4, 2) else "#ffffff", fontsize=9)
+            left[seg] += share
+    ax.set_xlim(0, 1)
+    ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.set_xlabel("Share of the segment's purchases")
+    ax.set_title("Each segment has a different favourite brand", loc="left", color=INK, fontsize=11)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+    ax.legend(ncol=5, loc="upper center", bbox_to_anchor=(0.5, -0.22), frameon=False, fontsize=9,
+              handlelength=1, labelcolor=MUTED)
+    fig.tight_layout()
+    fig.savefig(OUT / "segment_brand_shares.png", dpi=160)
+    plt.close(fig)
+
+    # --- price elasticity by segment: point + 95% CI, two panels (different units)
+    response = segment_price_response(df, n_boot=200, random_state=0)
+    summary = response.summary
+    print("\n== Elasticity by segment ==")
+    print(summary.filter(like="elasticity").round(2))
+    for metric, a, b in [("propensity_elasticity", 3, 1), ("propensity_elasticity", 3, 0),
+                         ("quantity_elasticity", 1, 0), ("quantity_elasticity", 3, 1)]:
+        d, lo, hi = response.compare(metric, a, b)
+        print(f"  {metric}: segment {a} - segment {b} = {d:.2f} [{lo:.2f}, {hi:.2f}]")
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.4), sharey=True)
+    order = summary["propensity_elasticity"].sort_values(ascending=False).index[::-1]  # steepest on top
+    for ax, (metric, title) in zip(axes, [
+        ("propensity_elasticity", "Purchase probability\n(does a trip end in a purchase?)"),
+        ("quantity_elasticity", "Purchase quantity\n(how many units, given a purchase?)"),
+    ]):
+        for y, seg in enumerate(order):
+            r = summary.loc[seg]
+            ax.plot([r[f"{metric}_ci_low"], r[f"{metric}_ci_high"]], [y, y], color=MODEL, linewidth=2,
+                    solid_capstyle="round")
+            ax.scatter([r[metric]], [y], color=MODEL, s=60, zorder=3, edgecolor=SURFACE, linewidth=1.5)
+            ax.text(r[metric], y + 0.18, f"{r[metric]:.2f}", ha="center", va="bottom", color=INK, fontsize=9)
+        ax.axvline(0, color=INK, linewidth=1)
+        ax.set_yticks(range(len(order)))
+        ax.set_yticklabels([label(s) for s in order])
+        ax.set_ylim(-0.6, len(order) - 0.4)
+        ax.set_title(title, loc="left", color=INK, fontsize=10)
+        ax.set_xlabel("Price elasticity (95% CI)   ← more price-sensitive")
+        ax.grid(axis="x", color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis="y", length=0)
+    fig.tight_layout()
+    fig.savefig(OUT / "segment_elasticity.png", dpi=160)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     cluster_selection_chart()
     heldout_chart()
+    segment_charts()

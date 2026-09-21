@@ -12,6 +12,12 @@ from src.customer_segmentation import (
 )
 from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
 from src.customer_segmentation.evaluation import cross_validate_by_customer
+from src.customer_segmentation.segment_behavior import (
+    assign_segments,
+    brand_shares_by_segment,
+    segment_price_response,
+)
+from src.customer_segmentation.segmentation import SEGMENT_NAMES
 
 
 def run_segmentation() -> None:
@@ -93,9 +99,43 @@ def run_purchase_behavior() -> None:
         print(f"  {model.__class__.__name__} saved to: {saved_to}")
 
 
+def run_segment_behavior() -> None:
+    print("\nJoining the pipelines: how does each segment respond to price?")
+    pipeline = SegmentationPipeline.load()
+    df = load_purchase_data()
+    df["Segment"] = assign_segments(df, pipeline)
+    occasions = df[df["Incidence"] == 1]
+
+    print("\n  Brand share of purchases by segment:")
+    shares = brand_shares_by_segment(df).round(2)
+    shares.index = [f"{s} ({SEGMENT_NAMES[s]})" for s in shares.index]
+    print(shares.to_string(float_format=lambda v: f"{v:.2f}"))
+
+    print("\n  Price elasticity by segment (customer-level bootstrap 95% CI):")
+    response = segment_price_response(df, n_boot=200, random_state=0)
+    for seg, row in response.summary.iterrows():
+        print(
+            f"    {seg} {SEGMENT_NAMES[seg]:<20} purchase: {row.propensity_elasticity:>6.2f} "
+            f"[{row.propensity_elasticity_ci_low:>6.2f}, {row.propensity_elasticity_ci_high:>6.2f}]   "
+            f"quantity: {row.quantity_elasticity:>5.2f} "
+            f"[{row.quantity_elasticity_ci_low:>5.2f}, {row.quantity_elasticity_ci_high:>5.2f}]"
+        )
+
+    print("\n  Does knowing the segment improve held-out prediction? (5-fold CV by customer)")
+    for name, plain, with_segment, occasions_only, metrics in [
+        ("Propensity", PurchasePropensityModel, lambda: PurchasePropensityModel(use_segment=True), False, ["roc_auc", "log_loss"]),
+        ("Brand choice", BrandChoiceModel, lambda: BrandChoiceModel(use_segment=True), True, ["accuracy", "log_loss"]),
+    ]:
+        base = cross_validate_by_customer(plain, df, occasions_only=occasions_only).mean()
+        seg = cross_validate_by_customer(with_segment, df, occasions_only=occasions_only).mean()
+        line = "  ".join(f"{m}: {base[m]:.3f} -> {seg[m]:.3f}" for m in metrics)
+        print(f"    {name:<13} price only -> + segment   {line}")
+
+
 def main() -> None:
     run_segmentation()
     run_purchase_behavior()
+    run_segment_behavior()
 
 
 if __name__ == "__main__":

@@ -32,6 +32,13 @@ PRICE_COLUMNS = [f"Price_{i}" for i in range(1, 6)]
 PROMOTION_COLUMNS = [f"Promotion_{i}" for i in range(1, 6)]
 
 
+def _segment_dummies(segment, segments) -> dict[str, np.ndarray | float]:
+    """One-hot columns ``Segment_<k>`` for *segment* (a scalar or a Series)."""
+    if isinstance(segment, pd.Series):
+        return {f"Segment_{k}": (segment == k).astype(float) for k in segments}
+    return {f"Segment_{k}": float(segment == k) for k in segments}
+
+
 class CoefficientEstimate(NamedTuple):
     """A bootstrapped own-price coefficient estimate for one brand."""
 
@@ -56,10 +63,14 @@ class PurchasePropensityModel:
         If True, also fits on average promotion activity across the 5
         brands (the "Purchase Probability with Promotion Feature"
         analysis in the notebook).
+    use_segment:
+        If True, also uses the shopper's customer segment (a ``Segment``
+        column, see ``segment_behavior.assign_segments``).
     """
 
-    def __init__(self, use_promotion: bool = False) -> None:
+    def __init__(self, use_promotion: bool = False, use_segment: bool = False) -> None:
         self.use_promotion = use_promotion
+        self.use_segment = use_segment
         self.model = LogisticRegression(solver="sag", max_iter=5000)
         self._is_fitted = False
 
@@ -67,10 +78,14 @@ class PurchasePropensityModel:
         X = pd.DataFrame({"Mean_Price": df[PRICE_COLUMNS].mean(axis=1)})
         if self.use_promotion:
             X["Mean_Promotion"] = df[PROMOTION_COLUMNS].mean(axis=1)
+        if self.use_segment:
+            X = X.assign(**_segment_dummies(df["Segment"], self.segments_))
         return X
 
     def fit(self, df: pd.DataFrame) -> "PurchasePropensityModel":
         """Fit on purchase-occasion data (one row per shopping trip)."""
+        if self.use_segment:
+            self.segments_ = sorted(df["Segment"].unique())
         self.model.fit(self._features(df), df["Incidence"])
         self.base_rate_ = float(df["Incidence"].mean())
         self._is_fitted = True
@@ -100,23 +115,32 @@ class PurchasePropensityModel:
             },
         )
 
-    def predict_proba(self, price, promotion: float = 1.0) -> np.ndarray:
-        """P(purchase) at the given average price point(s)."""
+    def predict_proba(self, price, promotion: float = 1.0, segment: int | None = None) -> np.ndarray:
+        """P(purchase) at the given average price point(s).
+
+        Models fit with ``use_segment=True`` need the shopper's *segment*.
+        """
         self._check_fitted()
         price = np.atleast_1d(np.asarray(price, dtype=float))
         X = pd.DataFrame({"Mean_Price": price})
         if self.use_promotion:
             X["Mean_Promotion"] = promotion
+        if self.use_segment:
+            if segment is None:
+                raise ValueError("This model was fit with use_segment=True; pass `segment`.")
+            X = X.assign(**_segment_dummies(segment, self.segments_))
         return self.model.predict_proba(X)[:, 1]
 
-    def price_elasticity(self, price_range, promotion: float = 1.0) -> np.ndarray:
+    def price_elasticity(
+        self, price_range, promotion: float = 1.0, segment: int | None = None
+    ) -> np.ndarray:
         """Own-price elasticity of purchase probability at each price point.
 
         elasticity(p) = beta_price * p * (1 - P(purchase | p))
         """
         self._check_fitted()
         price_range = np.atleast_1d(np.asarray(price_range, dtype=float))
-        proba = self.predict_proba(price_range, promotion=promotion)
+        proba = self.predict_proba(price_range, promotion=promotion, segment=segment)
         beta_price = self.model.coef_[0][0]
         return beta_price * price_range * (1 - proba)
 
@@ -140,15 +164,27 @@ class PurchasePropensityModel:
             raise RuntimeError("Model is not fitted yet. Call .fit() before using this method.")
 
     def __repr__(self) -> str:
-        return f"PurchasePropensityModel(use_promotion={self.use_promotion}, fitted={self._is_fitted})"
+        return (
+            f"PurchasePropensityModel(use_promotion={self.use_promotion}, "
+            f"use_segment={self.use_segment}, fitted={self._is_fitted})"
+        )
 
 
 class BrandChoiceModel:
     """Multinomial logistic regression predicting which brand a customer
     chooses on a purchase occasion, from the five brands' prices.
+
+    Parameters
+    ----------
+    use_segment:
+        If True, also uses the shopper's customer segment (a ``Segment``
+        column, see ``segment_behavior.assign_segments``). Brand loyalty
+        differs sharply between segments, so this is a large gain over
+        price alone.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, use_segment: bool = False) -> None:
+        self.use_segment = use_segment
         self.model = LogisticRegression(solver="sag", max_iter=5000)
         self._is_fitted = False
         self.classes_: np.ndarray | None = None
@@ -156,8 +192,10 @@ class BrandChoiceModel:
 
     def fit(self, purchase_occasions: pd.DataFrame) -> "BrandChoiceModel":
         """Fit on rows where a purchase occurred (``Incidence == 1``)."""
+        if self.use_segment:
+            self.segments_ = sorted(purchase_occasions["Segment"].unique())
         X = purchase_occasions[PRICE_COLUMNS]
-        self.model.fit(X, purchase_occasions["Brand"])
+        self.model.fit(self._features(purchase_occasions), purchase_occasions["Brand"])
         self.classes_ = self.model.classes_
         shares = purchase_occasions["Brand"].value_counts(normalize=True)
         self.brand_shares_ = shares.reindex(self.classes_).to_numpy()
@@ -165,14 +203,21 @@ class BrandChoiceModel:
         self._is_fitted = True
         return self
 
+    def _features(self, df: pd.DataFrame) -> pd.DataFrame:
+        X = df[PRICE_COLUMNS]
+        if self.use_segment:
+            X = X.assign(**_segment_dummies(df["Segment"], self.segments_))
+        return X
+
     def predict_proba(self, prices: pd.DataFrame) -> np.ndarray:
-        """P(brand) for each row of `prices` (must have the 5 price columns)."""
+        """P(brand) for each row of `prices` (must have the 5 price columns,
+        plus ``Segment`` if the model uses it)."""
         self._check_fitted()
-        return self.model.predict_proba(prices[PRICE_COLUMNS])
+        return self.model.predict_proba(self._features(prices))
 
     def predict(self, prices: pd.DataFrame) -> np.ndarray:
         self._check_fitted()
-        return self.model.predict(prices[PRICE_COLUMNS])
+        return self.model.predict(self._features(prices))
 
     def evaluate(self, purchase_occasions: pd.DataFrame) -> Evaluation:
         """Score on held-out purchases, against always predicting the
@@ -198,10 +243,12 @@ class BrandChoiceModel:
         brand: int,
         price_range,
         other_prices: dict[int, float] | None = None,
+        segment: int | None = None,
     ) -> np.ndarray:
         """Own-price elasticity of `brand`'s choice probability as its price
         varies over `price_range`, holding every other brand's price fixed
         (default: at each brand's mean price in the training data).
+        Models fit with ``use_segment=True`` need the shopper's *segment*.
         """
         self._check_fitted()
         price_range = np.atleast_1d(np.asarray(price_range, dtype=float))
@@ -212,8 +259,12 @@ class BrandChoiceModel:
             for i in range(1, 6)
         })
         X[f"Price_{brand}"] = price_range
+        if self.use_segment:
+            if segment is None:
+                raise ValueError("This model was fit with use_segment=True; pass `segment`.")
+            X = X.assign(**_segment_dummies(segment, self.segments_))
 
-        proba = self.model.predict_proba(X[PRICE_COLUMNS])
+        proba = self.model.predict_proba(X)
         class_idx = list(self.classes_).index(brand)
         own_proba = proba[:, class_idx]
         beta_own = self.model.coef_[class_idx, brand - 1]
@@ -240,6 +291,8 @@ class BrandChoiceModel:
         the same population) used for `fit`.
         """
         self._check_fitted()
+        if self.use_segment:
+            raise NotImplementedError("Bootstrap significance is only implemented for price-only models.")
         rng = np.random.default_rng(random_state)
         n = len(purchase_occasions)
 
@@ -280,7 +333,7 @@ class BrandChoiceModel:
             raise RuntimeError("Model is not fitted yet. Call .fit() before using this method.")
 
     def __repr__(self) -> str:
-        return f"BrandChoiceModel(fitted={self._is_fitted})"
+        return f"BrandChoiceModel(use_segment={self.use_segment}, fitted={self._is_fitted})"
 
 
 class PurchaseQuantityModel:
