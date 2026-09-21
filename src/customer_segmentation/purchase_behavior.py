@@ -15,6 +15,16 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    brier_score_loss,
+    log_loss,
+    mean_absolute_error,
+    r2_score,
+    roc_auc_score,
+)
+
+from .evaluation import Evaluation
 
 _DEFAULT_MODELS_DIR = Path(__file__).parents[2] / "models"
 
@@ -53,14 +63,42 @@ class PurchasePropensityModel:
         self.model = LogisticRegression(solver="sag", max_iter=5000)
         self._is_fitted = False
 
-    def fit(self, df: pd.DataFrame) -> "PurchasePropensityModel":
-        """Fit on purchase-occasion data (one row per shopping trip)."""
+    def _features(self, df: pd.DataFrame) -> pd.DataFrame:
         X = pd.DataFrame({"Mean_Price": df[PRICE_COLUMNS].mean(axis=1)})
         if self.use_promotion:
             X["Mean_Promotion"] = df[PROMOTION_COLUMNS].mean(axis=1)
-        self.model.fit(X, df["Incidence"])
+        return X
+
+    def fit(self, df: pd.DataFrame) -> "PurchasePropensityModel":
+        """Fit on purchase-occasion data (one row per shopping trip)."""
+        self.model.fit(self._features(df), df["Incidence"])
+        self.base_rate_ = float(df["Incidence"].mean())
         self._is_fitted = True
         return self
+
+    def evaluate(self, df: pd.DataFrame) -> Evaluation:
+        """Score on held-out shopping trips, against always predicting the
+        training purchase rate.
+
+        Accuracy is left out on purpose: only ~25% of trips end in a
+        purchase, so "never predict a purchase" already scores ~75%.
+        """
+        self._check_fitted()
+        y = df["Incidence"]
+        proba = self.model.predict_proba(self._features(df))[:, 1]
+        base = np.full(len(y), self.base_rate_)
+        return Evaluation(
+            model={
+                "log_loss": log_loss(y, proba),
+                "brier": brier_score_loss(y, proba),
+                "roc_auc": roc_auc_score(y, proba),
+            },
+            baseline={
+                "log_loss": log_loss(y, base),
+                "brier": brier_score_loss(y, base),
+                "roc_auc": 0.5,
+            },
+        )
 
     def predict_proba(self, price, promotion: float = 1.0) -> np.ndarray:
         """P(purchase) at the given average price point(s)."""
@@ -121,6 +159,8 @@ class BrandChoiceModel:
         X = purchase_occasions[PRICE_COLUMNS]
         self.model.fit(X, purchase_occasions["Brand"])
         self.classes_ = self.model.classes_
+        shares = purchase_occasions["Brand"].value_counts(normalize=True)
+        self.brand_shares_ = shares.reindex(self.classes_).to_numpy()
         self.mean_prices_ = {i: X[f"Price_{i}"].mean() for i in range(1, 6)}
         self._is_fitted = True
         return self
@@ -133,6 +173,25 @@ class BrandChoiceModel:
     def predict(self, prices: pd.DataFrame) -> np.ndarray:
         self._check_fitted()
         return self.model.predict(prices[PRICE_COLUMNS])
+
+    def evaluate(self, purchase_occasions: pd.DataFrame) -> Evaluation:
+        """Score on held-out purchases, against always predicting the
+        training brand shares (the most-popular brand for accuracy)."""
+        self._check_fitted()
+        y = purchase_occasions["Brand"]
+        proba = self.predict_proba(purchase_occasions)
+        prior = np.tile(self.brand_shares_, (len(y), 1))
+        top_brand = self.classes_[self.brand_shares_.argmax()]
+        return Evaluation(
+            model={
+                "log_loss": log_loss(y, proba, labels=self.classes_),
+                "accuracy": accuracy_score(y, self.predict(purchase_occasions)),
+            },
+            baseline={
+                "log_loss": log_loss(y, prior, labels=self.classes_),
+                "accuracy": float((y == top_brand).mean()),
+            },
+        )
 
     def own_price_elasticity(
         self,
@@ -233,8 +292,8 @@ class PurchaseQuantityModel:
         self.model = LinearRegression()
         self._is_fitted = False
 
-    def fit(self, purchase_occasions: pd.DataFrame) -> "PurchaseQuantityModel":
-        """Fit on rows where a purchase occurred (``Incidence == 1``)."""
+    @staticmethod
+    def _features(purchase_occasions: pd.DataFrame) -> pd.DataFrame:
         brand_dummies = pd.get_dummies(purchase_occasions["Brand"], prefix="Brand")
         price_incidence = sum(
             brand_dummies.get(f"Brand_{i}", 0) * purchase_occasions[f"Price_{i}"]
@@ -244,13 +303,29 @@ class PurchaseQuantityModel:
             brand_dummies.get(f"Brand_{i}", 0) * purchase_occasions[f"Promotion_{i}"]
             for i in range(1, 6)
         )
-        X = pd.DataFrame({
+        return pd.DataFrame({
             "Price_Incidence": price_incidence,
             "Promotion_Incidence": promotion_incidence,
         })
-        self.model.fit(X, purchase_occasions["Quantity"])
+
+    def fit(self, purchase_occasions: pd.DataFrame) -> "PurchaseQuantityModel":
+        """Fit on rows where a purchase occurred (``Incidence == 1``)."""
+        self.model.fit(self._features(purchase_occasions), purchase_occasions["Quantity"])
+        self.mean_quantity_ = float(purchase_occasions["Quantity"].mean())
         self._is_fitted = True
         return self
+
+    def evaluate(self, purchase_occasions: pd.DataFrame) -> Evaluation:
+        """Score on held-out purchases, against always predicting the
+        training mean quantity."""
+        self._check_fitted()
+        y = purchase_occasions["Quantity"]
+        pred = self.model.predict(self._features(purchase_occasions))
+        base = np.full(len(y), self.mean_quantity_)
+        return Evaluation(
+            model={"r2": r2_score(y, pred), "mae": mean_absolute_error(y, pred)},
+            baseline={"r2": r2_score(y, base), "mae": mean_absolute_error(y, base)},
+        )
 
     def predict(self, price_paid, promotion: float = 0.0) -> np.ndarray:
         """Predicted quantity at the given price(s) paid for the chosen brand."""

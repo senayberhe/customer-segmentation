@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.metrics import adjusted_rand_score, davies_bouldin_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 _DEFAULT_MODELS_DIR = Path(__file__).parents[2] / "models"
@@ -130,6 +131,63 @@ class SegmentationPipeline:
         """Return the explained variance ratio for each PCA component."""
         self._check_fitted()
         return self.pca.explained_variance_ratio_
+
+    def cluster_diagnostics(
+        self,
+        X: pd.DataFrame,
+        k_range: range | list[int] = range(2, 11),
+    ) -> pd.DataFrame:
+        """Score candidate cluster counts on *X*, to justify ``n_clusters``.
+
+        Reuses this pipeline's scaler/PCA settings and refits KMeans for each
+        k. Higher silhouette and lower Davies-Bouldin mean better-separated
+        clusters; inertia always falls with k, so look for an elbow instead
+        of a minimum.
+
+        Returns
+        -------
+        pd.DataFrame indexed by k with ``inertia``, ``silhouette`` and
+        ``davies_bouldin`` columns.
+        """
+        Z = self._pca_space(X)
+        rows = []
+        for k in k_range:
+            km = KMeans(n_clusters=k, random_state=self.random_state, n_init="auto").fit(Z)
+            rows.append({
+                "k": k,
+                "inertia": km.inertia_,
+                "silhouette": silhouette_score(Z, km.labels_),
+                "davies_bouldin": davies_bouldin_score(Z, km.labels_),
+            })
+        return pd.DataFrame(rows).set_index("k")
+
+    def stability(self, X: pd.DataFrame, n_boot: int = 30, random_state: int = 0) -> np.ndarray:
+        """Adjusted Rand index between the full-data segments and segments
+        refit on bootstrap resamples of *X*.
+
+        1.0 means the customers always land in the same groups; values near
+        0 mean the segments are an artifact of the particular sample.
+        """
+        reference_pipeline = SegmentationPipeline(
+            self.n_components, self.n_clusters, self.random_state
+        ).fit(X)
+        reference = reference_pipeline.predict(X)
+        rng = np.random.default_rng(random_state)
+        scores = []
+        for i in range(n_boot):
+            sample = X.iloc[rng.integers(0, len(X), len(X))]
+            boot = SegmentationPipeline(self.n_components, self.n_clusters, random_state=i)
+            scores.append(adjusted_rand_score(reference, boot.fit(sample).predict(X)))
+        return np.array(scores)
+
+    def _pca_space(self, X: pd.DataFrame) -> np.ndarray:
+        """Fit a fresh scaler and PCA on *X* and return the projection.
+
+        Independent of this pipeline's fitted state, so diagnostics can run
+        on any data without disturbing a fitted model.
+        """
+        scaled = StandardScaler().fit_transform(X)
+        return PCA(n_components=self.n_components, random_state=self.random_state).fit_transform(scaled)
 
     # ------------------------------------------------------------------
     # Persistence
