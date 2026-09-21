@@ -12,6 +12,7 @@ from src.customer_segmentation import (
 )
 from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
 from src.customer_segmentation.evaluation import cross_validate_by_customer
+from src.customer_segmentation.history import add_purchase_history
 from src.customer_segmentation.segment_behavior import (
     assign_segments,
     brand_shares_by_segment,
@@ -121,15 +122,23 @@ def run_segment_behavior() -> None:
             f"[{row.quantity_elasticity_ci_low:>5.2f}, {row.quantity_elasticity_ci_high:>5.2f}]"
         )
 
-    print("\n  Does knowing the segment improve held-out prediction? (5-fold CV by customer)")
-    for name, plain, with_segment, occasions_only, metrics in [
-        ("Propensity", PurchasePropensityModel, lambda: PurchasePropensityModel(use_segment=True), False, ["roc_auc", "log_loss"]),
-        ("Brand choice", BrandChoiceModel, lambda: BrandChoiceModel(use_segment=True), True, ["accuracy", "log_loss"]),
+    print("\n  What improves held-out prediction? (5-fold CV by customer)")
+    df = add_purchase_history(df)
+    for name, model_class, occasions_only, metrics in [
+        ("Propensity", PurchasePropensityModel, False, ["roc_auc", "log_loss"]),
+        ("Brand choice", BrandChoiceModel, True, ["accuracy", "log_loss"]),
     ]:
-        base = cross_validate_by_customer(plain, df, occasions_only=occasions_only).mean()
-        seg = cross_validate_by_customer(with_segment, df, occasions_only=occasions_only).mean()
-        line = "  ".join(f"{m}: {base[m]:.3f} -> {seg[m]:.3f}" for m in metrics)
-        print(f"    {name:<13} price only -> + segment   {line}")
+        print(f"    {name}")
+        for label, kwargs in [
+            ("price only", {}),
+            ("+ segment", {"use_segment": True}),
+            ("+ purchase history", {"use_history": True}),
+            ("+ both", {"use_segment": True, "use_history": True}),
+        ]:
+            cv = cross_validate_by_customer(
+                lambda: model_class(**kwargs), df, occasions_only=occasions_only
+            ).mean()
+            print(f"      {label:<20}" + "  ".join(f"{m}={cv[m]:.3f}" for m in metrics))
 
 
 def main() -> None:

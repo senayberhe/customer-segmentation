@@ -22,6 +22,7 @@ from src.customer_segmentation import (
 )
 from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
 from src.customer_segmentation.evaluation import cross_validate_by_customer
+from src.customer_segmentation.history import add_purchase_history
 from src.customer_segmentation.segment_behavior import (
     assign_segments,
     brand_shares_by_segment,
@@ -176,7 +177,54 @@ def segment_charts() -> None:
     plt.close(fig)
 
 
+def feature_ladder_chart() -> None:
+    """Held-out performance as features are added: price -> segment -> history."""
+    df = load_purchase_data()
+    df["Segment"] = assign_segments(df, SegmentationPipeline.load())
+    df = add_purchase_history(df)
+    steps = [
+        ("Price\nonly", {}),
+        ("+ Segment", {"use_segment": True}),
+        ("+ History", {"use_history": True}),
+        ("+ Both", {"use_segment": True, "use_history": True}),
+    ]
+    panels = [
+        ("Does this trip end in a purchase?\nROC AUC (higher = better)", PurchasePropensityModel, False,
+         "roc_auc", 0.5, 0.0, 0.85),
+        ("Which brand is bought?\nAccuracy (higher = better)", BrandChoiceModel, True,
+         "accuracy", None, 0.0, 0.85),
+    ]
+    print("\n== Feature ladder (customer-grouped 5-fold CV) ==")
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
+    for ax, (title, cls, occasions, metric, floor, lo, hi) in zip(axes, panels):
+        vals, errs = [], []
+        for name, kwargs in steps:
+            cv = cross_validate_by_customer(lambda: cls(**kwargs), df, occasions_only=occasions)
+            vals.append(cv[metric].mean())
+            errs.append(cv[metric].std())
+            print(f"{title.splitlines()[0]:<34} {name.replace(chr(10), ' '):<12} {vals[-1]:.3f}±{errs[-1]:.3f}")
+        baseline = cv[f"baseline_{metric}"].mean()
+        x = range(len(steps))
+        bars = ax.bar(x, vals, yerr=errs, color=[MODEL] * len(steps), width=0.6, capsize=4,
+                      error_kw={"ecolor": INK, "linewidth": 1})
+        ax.axhline(baseline, color=BASELINE, linewidth=1.5, linestyle=(0, (4, 3)))
+        for bar, v, e in zip(bars, vals, errs):
+            ax.text(bar.get_x() + bar.get_width() / 2, v + e + (hi - lo) * 0.015, f"{v:.3f}",
+                    ha="center", va="bottom", color=INK, fontsize=9)
+        ax.set_xticks(list(x))
+        ax.set_xticklabels([n for n, _ in steps])
+        ax.set_ylim(lo, hi)
+        ax.set_title(f"{title}\ndashed line = no-skill baseline ({baseline:.2f})", loc="left",
+                     color=INK, fontsize=10)
+        ax.grid(axis="y", color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+    fig.tight_layout()
+    fig.savefig(OUT / "feature_ladder.png", dpi=160)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     cluster_selection_chart()
     heldout_chart()
     segment_charts()
+    feature_ladder_chart()

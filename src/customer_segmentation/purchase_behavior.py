@@ -32,6 +32,14 @@ PRICE_COLUMNS = [f"Price_{i}" for i in range(1, 6)]
 PROMOTION_COLUMNS = [f"Promotion_{i}" for i in range(1, 6)]
 
 
+def _last_brand_dummies(last_brand) -> dict[str, np.ndarray | float]:
+    """One-hot ``Last_Brand_<b>`` columns for brands 1-5; a last brand of 0
+    (no earlier purchase) is all zeros."""
+    if isinstance(last_brand, pd.Series):
+        return {f"Last_Brand_{b}": (last_brand == b).astype(float) for b in range(1, 6)}
+    return {f"Last_Brand_{b}": float(last_brand == b) for b in range(1, 6)}
+
+
 def _segment_dummies(segment, segments) -> dict[str, np.ndarray | float]:
     """One-hot columns ``Segment_<k>`` for *segment* (a scalar or a Series)."""
     if isinstance(segment, pd.Series):
@@ -66,11 +74,22 @@ class PurchasePropensityModel:
     use_segment:
         If True, also uses the shopper's customer segment (a ``Segment``
         column, see ``segment_behavior.assign_segments``).
+    use_history:
+        If True, also uses how long ago the shopper last bought (columns
+        from ``history.add_purchase_history``). Recency is the strongest
+        predictor available: in the data, a trip the day after a purchase
+        ends in one ~53% of the time, versus ~11% after two months without.
     """
 
-    def __init__(self, use_promotion: bool = False, use_segment: bool = False) -> None:
+    def __init__(
+        self,
+        use_promotion: bool = False,
+        use_segment: bool = False,
+        use_history: bool = False,
+    ) -> None:
         self.use_promotion = use_promotion
         self.use_segment = use_segment
+        self.use_history = use_history
         self.model = LogisticRegression(solver="sag", max_iter=5000)
         self._is_fitted = False
 
@@ -80,6 +99,9 @@ class PurchasePropensityModel:
             X["Mean_Promotion"] = df[PROMOTION_COLUMNS].mean(axis=1)
         if self.use_segment:
             X = X.assign(**_segment_dummies(df["Segment"], self.segments_))
+        if self.use_history:
+            X["Log_Days_Since"] = np.log1p(df["Days_Since_Purchase"])
+            X["No_Prior_Purchase"] = df["No_Prior_Purchase"]
         return X
 
     def fit(self, df: pd.DataFrame) -> "PurchasePropensityModel":
@@ -115,10 +137,18 @@ class PurchasePropensityModel:
             },
         )
 
-    def predict_proba(self, price, promotion: float = 1.0, segment: int | None = None) -> np.ndarray:
+    def predict_proba(
+        self,
+        price,
+        promotion: float = 1.0,
+        segment: int | None = None,
+        days_since: float | None = None,
+    ) -> np.ndarray:
         """P(purchase) at the given average price point(s).
 
-        Models fit with ``use_segment=True`` need the shopper's *segment*.
+        Models fit with ``use_segment=True`` need the shopper's *segment*;
+        those with ``use_history=True`` need *days_since* their last
+        purchase (the shopper is assumed to have bought before).
         """
         self._check_fitted()
         price = np.atleast_1d(np.asarray(price, dtype=float))
@@ -129,10 +159,19 @@ class PurchasePropensityModel:
             if segment is None:
                 raise ValueError("This model was fit with use_segment=True; pass `segment`.")
             X = X.assign(**_segment_dummies(segment, self.segments_))
+        if self.use_history:
+            if days_since is None:
+                raise ValueError("This model was fit with use_history=True; pass `days_since`.")
+            X["Log_Days_Since"] = np.log1p(days_since)
+            X["No_Prior_Purchase"] = 0.0
         return self.model.predict_proba(X)[:, 1]
 
     def price_elasticity(
-        self, price_range, promotion: float = 1.0, segment: int | None = None
+        self,
+        price_range,
+        promotion: float = 1.0,
+        segment: int | None = None,
+        days_since: float | None = None,
     ) -> np.ndarray:
         """Own-price elasticity of purchase probability at each price point.
 
@@ -140,7 +179,9 @@ class PurchasePropensityModel:
         """
         self._check_fitted()
         price_range = np.atleast_1d(np.asarray(price_range, dtype=float))
-        proba = self.predict_proba(price_range, promotion=promotion, segment=segment)
+        proba = self.predict_proba(
+            price_range, promotion=promotion, segment=segment, days_since=days_since
+        )
         beta_price = self.model.coef_[0][0]
         return beta_price * price_range * (1 - proba)
 
@@ -166,7 +207,8 @@ class PurchasePropensityModel:
     def __repr__(self) -> str:
         return (
             f"PurchasePropensityModel(use_promotion={self.use_promotion}, "
-            f"use_segment={self.use_segment}, fitted={self._is_fitted})"
+            f"use_segment={self.use_segment}, use_history={self.use_history}, "
+            f"fitted={self._is_fitted})"
         )
 
 
@@ -181,10 +223,15 @@ class BrandChoiceModel:
         column, see ``segment_behavior.assign_segments``). Brand loyalty
         differs sharply between segments, so this is a large gain over
         price alone.
+    use_history:
+        If True, also uses the brand the shopper bought last (a
+        ``Last_Brand`` column from ``history.add_purchase_history``).
+        Shoppers repeat the previous brand about three times in four.
     """
 
-    def __init__(self, use_segment: bool = False) -> None:
+    def __init__(self, use_segment: bool = False, use_history: bool = False) -> None:
         self.use_segment = use_segment
+        self.use_history = use_history
         self.model = LogisticRegression(solver="sag", max_iter=5000)
         self._is_fitted = False
         self.classes_: np.ndarray | None = None
@@ -207,6 +254,8 @@ class BrandChoiceModel:
         X = df[PRICE_COLUMNS]
         if self.use_segment:
             X = X.assign(**_segment_dummies(df["Segment"], self.segments_))
+        if self.use_history:
+            X = X.assign(**_last_brand_dummies(df["Last_Brand"]))
         return X
 
     def predict_proba(self, prices: pd.DataFrame) -> np.ndarray:
@@ -244,11 +293,13 @@ class BrandChoiceModel:
         price_range,
         other_prices: dict[int, float] | None = None,
         segment: int | None = None,
+        last_brand: int | None = None,
     ) -> np.ndarray:
         """Own-price elasticity of `brand`'s choice probability as its price
         varies over `price_range`, holding every other brand's price fixed
         (default: at each brand's mean price in the training data).
-        Models fit with ``use_segment=True`` need the shopper's *segment*.
+        Models fit with ``use_segment=True`` need the shopper's *segment*;
+        those with ``use_history=True`` need *last_brand* (0 = new shopper).
         """
         self._check_fitted()
         price_range = np.atleast_1d(np.asarray(price_range, dtype=float))
@@ -263,6 +314,10 @@ class BrandChoiceModel:
             if segment is None:
                 raise ValueError("This model was fit with use_segment=True; pass `segment`.")
             X = X.assign(**_segment_dummies(segment, self.segments_))
+        if self.use_history:
+            if last_brand is None:
+                raise ValueError("This model was fit with use_history=True; pass `last_brand`.")
+            X = X.assign(**_last_brand_dummies(last_brand))
 
         proba = self.model.predict_proba(X)
         class_idx = list(self.classes_).index(brand)
@@ -291,7 +346,7 @@ class BrandChoiceModel:
         the same population) used for `fit`.
         """
         self._check_fitted()
-        if self.use_segment:
+        if self.use_segment or self.use_history:
             raise NotImplementedError("Bootstrap significance is only implemented for price-only models.")
         rng = np.random.default_rng(random_state)
         n = len(purchase_occasions)
@@ -333,7 +388,10 @@ class BrandChoiceModel:
             raise RuntimeError("Model is not fitted yet. Call .fit() before using this method.")
 
     def __repr__(self) -> str:
-        return f"BrandChoiceModel(use_segment={self.use_segment}, fitted={self._is_fitted})"
+        return (
+            f"BrandChoiceModel(use_segment={self.use_segment}, "
+            f"use_history={self.use_history}, fitted={self._is_fitted})"
+        )
 
 
 class PurchaseQuantityModel:

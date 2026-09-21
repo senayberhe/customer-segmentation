@@ -30,9 +30,10 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 | **Software engineering** | Structured code as a reusable Python package (`src/` layout) with clear separation of concerns across two pipelines |
 | **API design** | Designed `SegmentationPipeline`, `PurchasePropensityModel`, `BrandChoiceModel`, and `PurchaseQuantityModel` classes with a consistent sklearn-style interface (`fit`, `predict`/`predict_proba`) |
 | **Model persistence** | Implemented `save()` / `load()` on every model with proper serialisation so models can be deployed without retraining |
+| **Feature engineering for prediction** | Built leak-free purchase-history features (recency, last brand) and showed on held-out customers that they lift brand accuracy from 38.6% to 72.8% and purchase ROC AUC from 0.54 to 0.68 — and reported that the recency effect runs opposite to the restocking story one might assume |
 | **Joining models & uncertainty** | Connected the segmentation and purchase pipelines: per-segment price elasticities with a customer-level (cluster) bootstrap, and showed segments lift held-out brand-choice accuracy from 38.6% to 57.4% |
 | **Model evaluation** | Scored every supervised model on held-out customers (5-fold CV grouped by customer ID, so no shopper appears in both train and test) against a naive baseline; validated the choice of k with silhouette, Davies-Bouldin and bootstrap stability — and reported plainly where the models are weak |
-| **Testing** | Wrote 112 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), evaluation leakage checks, and round-trip persistence |
+| **Testing** | Wrote 136 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), evaluation and feature leakage checks, and round-trip persistence |
 | **Exploratory analysis** | Three Jupyter notebooks documenting EDA, predictive analysis, and purchase behaviour deep-dives |
 
 ---
@@ -106,7 +107,7 @@ Fitting a model and plotting its curve doesn't show it predicts anything. Every 
 | Brand choice | Accuracy | 0.386 | 0.338 | Real but modest lift; log loss 1.409 vs 1.445 |
 | Quantity | R² | 0.033 | −0.010 | Tiny; the gain is within fold-to-fold noise (±0.036) |
 
-**What this means.** Price is a genuine driver of *which brand* a shopper picks, but average price alone says almost nothing about *whether a given trip ends in a purchase* or *how many units*. The elasticity estimates are useful for describing direction and relative sensitivity between brands; they are not good enough to forecast individual purchases. Price alone is a weak predictor, but *who the shopper is* is not — see the next section, where adding the customer segment lifts brand-choice accuracy from 38.6% to 57.4%. Purchase history (days since last purchase, previous brand and quantity) is in the data too and isn't used yet.
+**What this means.** Price is a genuine driver of *which brand* a shopper picks, but average price alone says almost nothing about *whether a given trip ends in a purchase* or *how many units*. The elasticity estimates are useful for describing direction and relative sensitivity between brands; they are not good enough to forecast individual purchases. Price alone is a weak predictor, but *who the shopper is* and *what they did last time* are not — the next two sections show the customer segment lifting brand-choice accuracy from 38.6% to 57.4%, and purchase history lifting it to 72.8%.
 
 ### Is k=4 the right number of segments?
 
@@ -145,7 +146,7 @@ Standard shoppers buy Brand 5 63% of the time, fewer-opportunities shoppers buy 
 | Propensity | ROC AUC | 0.537 | 0.569 |
 | Propensity | Log loss | 0.561 | 0.557 |
 
-Brand choice improves a lot; whether a trip ends in a purchase improves only a little.
+Brand choice improves a lot; whether a trip ends in a purchase improves only a little. (The next section adds purchase history, which overtakes the segment.)
 
 ### Price sensitivity differs by segment
 
@@ -167,6 +168,37 @@ What the intervals do and don't support:
 - **Don't over-read the pairs.** Across all 12 pairwise comparisons (6 segment pairs × 2 metrics) only three intervals exclude zero, and two of those barely do. With that many comparisons, one or two would look significant by chance alone; the well-off vs fewer-opportunities purchase-probability gap is the one that stands out.
 
 **Caveats.** These are observational estimates: every shopper faces the same shelf prices on a given day, so price effects are entangled with anything else that varies by day (seasonality, store events). Segments contain 76–181 shoppers each, hence the wide intervals. And since price explains little of individual purchase decisions overall (see above), read these as a comparison of *relative* sensitivity between segments, not as forecasts.
+
+---
+
+## Purchase History: Habits Beat Price
+
+`history.py` adds three features per trip, each computed **only from that shopper's earlier trips** (a trip never sees itself or the future — unit tests flip a trip's own outcome and later trips to prove nothing leaks): days since the previous purchase, whether there was any earlier purchase, and the brand bought last.
+
+![Held-out performance as features are added: price only, plus segment, plus purchase history, plus both](docs/images/feature_ladder.png)
+
+*Customer-grouped 5-fold CV; bars are means, whiskers ±1 std across folds.*
+
+| Model | Metric | Price only | + Segment | + History | + Both |
+|---|---|---|---|---|---|
+| Propensity | ROC AUC | 0.537 | 0.569 | 0.678 | **0.680** |
+| Propensity | Log loss | 0.561 | 0.557 | 0.526 | **0.524** |
+| Brand choice | Accuracy | 0.386 | 0.574 | 0.728 | **0.733** |
+| Brand choice | Log loss | 1.409 | 1.148 | 0.862 | **0.803** |
+
+**Shoppers are creatures of habit.**
+- **Brand:** 74% of purchases repeat the brand bought last time, so knowing it takes brand accuracy from 39% to 73%.
+- **Purchase timing:** it is a *recency* effect, and the direction is not the one you might guess. A trip is most likely to end in a purchase right after a purchase, and steadily less likely the longer the gap:
+
+| Days since last purchase | 1 | 2–3 | 5–7 | 10–14 | 20–30 | 60+ |
+|---|---|---|---|---|---|---|
+| Trips ending in a purchase | 54% | 42–43% | 39% | 32% | 22% | 11% |
+
+  This most likely reflects shopper *engagement* (frequent buyers keep buying) rather than a restocking cycle. It is a predictive pattern, not a causal one.
+
+**Segment matters less once history is known** — the last brand already reveals a shopper's preferred brand (accuracy 0.728 → 0.733). It still earns its place for new shoppers: for the 3.4% of purchases with no earlier purchase, adding the segment lifts brand accuracy from 46% to 54%. So segments answer the cold-start question that history can't.
+
+**Price effects hold up.** Controlling for history barely moves the price coefficients (purchase-probability price coefficient −2.35 → −2.44; brand own-price coefficients essentially unchanged, and Brand 3 is still indistinguishable from zero). Price is a real but small driver next to habit.
 
 ---
 
@@ -233,6 +265,7 @@ customer_segmentation/
 │   ├── segmentation.py            # SegmentationPipeline class
 │   ├── purchase_behavior.py       # Purchase propensity, brand choice, quantity models
 │   ├── evaluation.py              # Customer-grouped splits and cross-validation
+│   ├── history.py                 # Leak-free purchase-history features
 │   └── segment_behavior.py        # Per-segment price response (joins the two pipelines)
 │
 ├── tests/
@@ -240,7 +273,8 @@ customer_segmentation/
 │   ├── test_segmentation.py       # 30 tests
 │   ├── test_purchase_behavior.py  # 27 tests
 │   ├── test_evaluation.py         # 28 tests
-│   └── test_segment_behavior.py   # 27 tests — 112 total, 100% passing
+│   ├── test_segment_behavior.py   # 27 tests
+│   └── test_history.py            # 24 tests — 136 total, 100% passing
 │
 ├── scripts/
 │   └── make_evaluation_figures.py # Regenerates the evaluation charts
@@ -327,6 +361,7 @@ I treat tests as a first-class concern, not an afterthought. The test suite vali
 - **Correctness** — label counts, array shapes, explained variance bounds, probabilities summing to 1
 - **Economic sanity** — purchase probability and quantity both fall as price rises (the direction a real elasticity should have)
 - **Statistical honesty** — a bootstrapped confidence interval, not just a point estimate, is available before trusting a coefficient's sign
+- **No feature leakage** — history features never use the trip itself or later trips, and are independent across shoppers
 - **Segment analysis** — assignment is constant within a shopper, designed segment differences are recovered, and a synthetic check confirms the segment feature lifts held-out brand accuracy
 - **Evaluation integrity** — train and test folds never share a customer; models are compared against a baseline; a model fit on shuffled targets can't beat the mean
 - **Reproducibility** — `fit_predict` and `fit` → `predict` give identical results
@@ -334,7 +369,7 @@ I treat tests as a first-class concern, not an afterthought. The test suite vali
 
 ```bash
 pytest tests/ -v
-# 112 passed
+# 136 passed
 ```
 
 ---
