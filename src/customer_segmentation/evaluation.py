@@ -46,6 +46,7 @@ def cross_validate_by_customer(
     df: pd.DataFrame,
     n_splits: int = 5,
     occasions_only: bool = False,
+    random_state: int = 0,
 ) -> pd.DataFrame:
     """Customer-grouped k-fold evaluation of a purchase-behavior model.
 
@@ -59,6 +60,9 @@ def cross_validate_by_customer(
     occasions_only:
         Restrict train and test folds to rows where a purchase occurred
         (``Incidence == 1``), as the brand-choice and quantity models need.
+    random_state:
+        Seed for shuffling customers into folds. Shuffling matters: without
+        it folds depend on ID order, and results shift with library version.
 
     Returns
     -------
@@ -67,7 +71,8 @@ def cross_validate_by_customer(
         ``baseline_<metric>`` for the naive baseline.
     """
     rows = []
-    for train_idx, test_idx in GroupKFold(n_splits=n_splits).split(df, groups=df["ID"]):
+    folds = GroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    for train_idx, test_idx in folds.split(df, groups=df["ID"]):
         train, test = df.iloc[train_idx], df.iloc[test_idx]
         if occasions_only:
             train, test = train[train["Incidence"] == 1], test[test["Incidence"] == 1]

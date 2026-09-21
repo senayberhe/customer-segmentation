@@ -90,7 +90,7 @@ class PurchasePropensityModel:
         self.use_promotion = use_promotion
         self.use_segment = use_segment
         self.use_history = use_history
-        self.model = LogisticRegression(solver="sag", max_iter=5000)
+        self.model = LogisticRegression(solver="lbfgs", max_iter=5000)
         self._is_fitted = False
 
     def _features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -232,7 +232,7 @@ class BrandChoiceModel:
     def __init__(self, use_segment: bool = False, use_history: bool = False) -> None:
         self.use_segment = use_segment
         self.use_history = use_history
-        self.model = LogisticRegression(solver="sag", max_iter=5000)
+        self.model = LogisticRegression(solver="lbfgs", max_iter=5000)
         self._is_fitted = False
         self.classes_: np.ndarray | None = None
         self.mean_prices_: dict[int, float] = {}

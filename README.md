@@ -30,8 +30,8 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 | **Software engineering** | Structured code as a reusable Python package (`src/` layout) with clear separation of concerns across two pipelines |
 | **API design** | Designed `SegmentationPipeline`, `PurchasePropensityModel`, `BrandChoiceModel`, and `PurchaseQuantityModel` classes with a consistent sklearn-style interface (`fit`, `predict`/`predict_proba`) |
 | **Model persistence** | Implemented `save()` / `load()` on every model with proper serialisation so models can be deployed without retraining |
-| **Feature engineering for prediction** | Built leak-free purchase-history features (recency, last brand) and showed on held-out customers that they lift brand accuracy from 38.6% to 72.8% and purchase ROC AUC from 0.54 to 0.68 — and reported that the recency effect runs opposite to the restocking story one might assume |
-| **Joining models & uncertainty** | Connected the segmentation and purchase pipelines: per-segment price elasticities with a customer-level (cluster) bootstrap, and showed segments lift held-out brand-choice accuracy from 38.6% to 57.4% |
+| **Feature engineering for prediction** | Built leak-free purchase-history features (recency, last brand) and showed on held-out customers that they lift brand accuracy from 38.5% to 72.9% and purchase ROC AUC from 0.54 to 0.68 — and reported that the recency effect runs opposite to the restocking story one might assume |
+| **Joining models & uncertainty** | Connected the segmentation and purchase pipelines: per-segment price elasticities with a customer-level (cluster) bootstrap, and showed segments lift held-out brand-choice accuracy from 38.5% to 57.1% |
 | **Model evaluation** | Scored every supervised model on held-out customers (5-fold CV grouped by customer ID, so no shopper appears in both train and test) against a naive baseline; validated the choice of k with silhouette, Davies-Bouldin and bootstrap stability — and reported plainly where the models are weak |
 | **Testing** | Wrote 136 pytest tests covering correctness, edge cases, guard rails, economic sanity checks (higher price ⇒ lower demand), evaluation and feature leakage checks, and round-trip persistence |
 | **Exploratory analysis** | Three Jupyter notebooks documenting EDA, predictive analysis, and purchase behaviour deep-dives |
@@ -62,8 +62,8 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 | Model | What it predicts | Example finding |
 |---|---|---|
 | `PurchasePropensityModel` | P(purchase) from average price | Steep curve, but **extrapolated**: observed average prices only span $1.87–$2.10 (see caveat below) |
-| `BrandChoiceModel` | Which of 5 brands is chosen | Beats the brand-share baseline on held-out customers (38.6% vs 33.8% accuracy) |
-| `PurchaseQuantityModel` | Units purchased | Small but real price effect; explains ~3% of quantity variance on held-out customers |
+| `BrandChoiceModel` | Which of 5 brands is chosen | Beats the brand-share baseline on held-out customers (38.5% vs 29.8% accuracy) |
+| `PurchaseQuantityModel` | Units purchased | Small but real price effect; explains ~4% of quantity variance on held-out customers |
 
 ---
 
@@ -87,13 +87,13 @@ The project goes beyond a notebook prototype: it is structured as a proper Pytho
 
 ![Brand choice probability declining with own price for four of five brands; Brand 3 shown dashed as not statistically significant](docs/images/brand_choice_elasticity.png)
 
-> **On Brand 3's flat/rising curve — quantified, not just eyeballed.** The raw fitted coefficient for Brand 3 is `+0.43`, the only positive one among the five brands. Rather than trust or dismiss a single point estimate, `BrandChoiceModel.bootstrap_own_price_significance()` refits the model on 150 bootstrap resamples of the data and reports a confidence interval: Brand 3's is **[-0.29, +1.33]** — it crosses zero, so the sign can't be trusted. Every other brand's interval is comfortably negative and significant (e.g. Brand 1: [-4.27, -3.37]). The likely cause: Brand 3 has the smallest market share (5.7% of purchases) and the least own-price variation of any brand (std $0.046, a $1.87–$2.14 range), so there's little signal to separate its price effect from its correlation with Brand 4's and Brand 5's prices (r = 0.42 and 0.20). The chart reflects this honestly instead of hiding it or forcing the number to look "correct."
+> **On Brand 3's flat/rising curve — quantified, not just eyeballed.** The raw fitted coefficient for Brand 3 is `+0.52`, the only positive one among the five brands. Rather than trust or dismiss a single point estimate, `BrandChoiceModel.bootstrap_own_price_significance()` refits the model on 300 bootstrap resamples of the data (seeded, so the numbers reproduce) and reports a confidence interval: Brand 3's is **[-0.52, +1.26]** — it crosses zero, so the sign can't be trusted. Every other brand's interval is comfortably negative and significant (e.g. Brand 1: [-4.31, -3.37]). The likely cause: Brand 3 has the smallest market share (5.7% of purchases) and the least own-price variation of any brand (std $0.046, a $1.87–$2.14 range), so there's little signal to separate its price effect from its correlation with Brand 4's and Brand 5's prices (r = 0.42 and 0.20). The chart reflects this honestly instead of hiding it or forcing the number to look "correct."
 
 ---
 
 ## Model Evaluation
 
-Fitting a model and plotting its curve doesn't show it predicts anything. Every model here is scored on customers it never saw: purchase data has ~117 rows per shopper, so a random row split would leak each person's habits into the test set. Folds are grouped by customer ID instead, and each model is compared with a naive baseline that ignores price (the training purchase rate, brand shares, or mean quantity).
+Fitting a model and plotting its curve doesn't show it predicts anything. Every model here is scored on customers it never saw: purchase data has ~117 rows per shopper, so a random row split would leak each person's habits into the test set. Folds are grouped by customer ID instead, and each model is compared with a naive baseline that ignores price (the training purchase rate, brand shares, or mean quantity). Folds are shuffled with a fixed seed and the solvers are deterministic, so every number here reproduces exactly.
 
 ### Do the supervised models predict?
 
@@ -104,10 +104,10 @@ Fitting a model and plotting its curve doesn't show it predicts anything. Every 
 | Model | Metric | Model | Baseline | Verdict |
 |---|---|---|---|---|
 | Propensity | ROC AUC | 0.537 | 0.500 | Barely better than chance; log loss (0.561 vs 0.562) and Brier score are indistinguishable from baseline |
-| Brand choice | Accuracy | 0.386 | 0.338 | Real but modest lift; log loss 1.409 vs 1.445 |
-| Quantity | R² | 0.033 | −0.010 | Tiny; the gain is within fold-to-fold noise (±0.036) |
+| Brand choice | Accuracy | 0.385 | 0.298 | Real but modest lift; log loss 1.410 vs 1.446 |
+| Quantity | R² | 0.042 | −0.004 | Tiny; the gain is about one fold-to-fold standard deviation (±0.036) |
 
-**What this means.** Price is a genuine driver of *which brand* a shopper picks, but average price alone says almost nothing about *whether a given trip ends in a purchase* or *how many units*. The elasticity estimates are useful for describing direction and relative sensitivity between brands; they are not good enough to forecast individual purchases. Price alone is a weak predictor, but *who the shopper is* and *what they did last time* are not — the next two sections show the customer segment lifting brand-choice accuracy from 38.6% to 57.4%, and purchase history lifting it to 72.8%.
+**What this means.** Price is a genuine driver of *which brand* a shopper picks, but average price alone says almost nothing about *whether a given trip ends in a purchase* or *how many units*. The elasticity estimates are useful for describing direction and relative sensitivity between brands; they are not good enough to forecast individual purchases. Price alone is a weak predictor, but *who the shopper is* and *what they did last time* are not — the next two sections show the customer segment lifting brand-choice accuracy from 38.5% to 57.1%, and purchase history lifting it to 72.9%.
 
 ### Is k=4 the right number of segments?
 
@@ -141,9 +141,9 @@ Standard shoppers buy Brand 5 63% of the time, fewer-opportunities shoppers buy 
 
 | Model | Metric | Price only | + Segment |
 |---|---|---|---|
-| Brand choice | Accuracy | 0.386 | **0.574** |
-| Brand choice | Log loss | 1.409 | **1.148** |
-| Propensity | ROC AUC | 0.537 | 0.569 |
+| Brand choice | Accuracy | 0.385 | **0.571** |
+| Brand choice | Log loss | 1.410 | **1.160** |
+| Propensity | ROC AUC | 0.537 | 0.572 |
 | Propensity | Log loss | 0.561 | 0.557 |
 
 Brand choice improves a lot; whether a trip ends in a purchase improves only a little. (The next section adds purchase history, which overtakes the segment.)
@@ -181,13 +181,13 @@ What the intervals do and don't support:
 
 | Model | Metric | Price only | + Segment | + History | + Both |
 |---|---|---|---|---|---|
-| Propensity | ROC AUC | 0.537 | 0.569 | 0.678 | **0.680** |
+| Propensity | ROC AUC | 0.537 | 0.572 | 0.678 | **0.681** |
 | Propensity | Log loss | 0.561 | 0.557 | 0.526 | **0.524** |
-| Brand choice | Accuracy | 0.386 | 0.574 | 0.728 | **0.733** |
-| Brand choice | Log loss | 1.409 | 1.148 | 0.862 | **0.803** |
+| Brand choice | Accuracy | 0.385 | 0.571 | 0.729 | **0.735** |
+| Brand choice | Log loss | 1.410 | 1.160 | 0.864 | **0.807** |
 
 **Shoppers are creatures of habit.**
-- **Brand:** 74% of purchases repeat the brand bought last time, so knowing it takes brand accuracy from 39% to 73%.
+- **Brand:** 74% of purchases repeat the brand bought last time, so knowing it takes brand accuracy from 38.5% to 73%.
 - **Purchase timing:** it is a *recency* effect, and the direction is not the one you might guess. A trip is most likely to end in a purchase right after a purchase, and steadily less likely the longer the gap:
 
 | Days since last purchase | 1 | 2–3 | 5–7 | 10–14 | 20–30 | 60+ |
@@ -196,7 +196,7 @@ What the intervals do and don't support:
 
   This most likely reflects shopper *engagement* (frequent buyers keep buying) rather than a restocking cycle. It is a predictive pattern, not a causal one.
 
-**Segment matters less once history is known** — the last brand already reveals a shopper's preferred brand (accuracy 0.728 → 0.733). It still earns its place for new shoppers: for the 3.4% of purchases with no earlier purchase, adding the segment lifts brand accuracy from 46% to 54%. So segments answer the cold-start question that history can't.
+**Segment matters less once history is known** — the last brand already reveals a shopper's preferred brand (accuracy 0.729 → 0.735). It still earns its place for new shoppers: for the 3.4% of purchases with no earlier purchase, adding the segment lifts brand accuracy from 45% to 54%. So segments answer the cold-start question that history can't.
 
 **Price effects hold up.** Controlling for history barely moves the price coefficients (purchase-probability price coefficient −2.35 → −2.44; brand own-price coefficients essentially unchanged, and Brand 3 is still indistinguishable from zero). Price is a real but small driver next to habit.
 
@@ -280,6 +280,7 @@ customer_segmentation/
 │   └── make_evaluation_figures.py # Regenerates the evaluation charts
 │
 ├── main.py                        # Runnable pipeline entry point
+├── audiobooks/                    # Separate Keras side project (optional `audiobooks` dependency group)
 └── pyproject.toml                 # Dependency management (uv)
 ```
 
@@ -288,15 +289,30 @@ customer_segmentation/
 ## How to Run
 
 ```bash
-# 1. Install dependencies (requires Python ≥ 3.10)
-pip install uv && uv sync
+# 1. Install (requires uv: pip install uv). This installs the package and its
+#    dependencies into .venv, and lets you `import customer_segmentation`.
+uv sync
 
-# 2. Run both pipelines (segmentation + purchase-behavior prediction)
-python main.py
+# 2. Run both pipelines (segmentation, purchase behavior, segment analysis)
+uv run python main.py
 
 # 3. Run the test suite
-pytest tests/ -v
+uv run pytest
+
+# 4. Regenerate the charts in docs/images/
+uv run python -m scripts.make_evaluation_figures
 ```
+
+Optional dependency groups keep the default install light:
+
+```bash
+uv sync --group notebooks    # JupyterLab + seaborn for the analysis notebooks
+uv sync --group audiobooks   # adds TensorFlow for the audiobooks/ side project
+```
+
+`audiobooks/` is a separate deep-learning experiment (a small Keras neural network
+predicting whether an audiobook customer converts). It is unrelated to the pipelines above and isn't
+needed to run or test them.
 
 ---
 
@@ -304,8 +320,8 @@ pytest tests/ -v
 
 **Clean pipeline API — sklearn-style interface**
 ```python
-from src.customer_segmentation import SegmentationPipeline, load_segmentation_data
-from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
+from customer_segmentation import SegmentationPipeline, load_segmentation_data
+from customer_segmentation.data_loader import SEGMENTATION_FEATURES
 
 df = load_segmentation_data()
 X = df[SEGMENTATION_FEATURES]
@@ -327,26 +343,26 @@ labels = pipeline.predict(new_customers)
 
 **Predicting how customers react to price**
 ```python
-from src.customer_segmentation import PurchasePropensityModel, load_purchase_data
+from customer_segmentation import PurchasePropensityModel, load_purchase_data
 
 df = load_purchase_data()
 model = PurchasePropensityModel().fit(df)
 
-model.predict_proba([1.0, 2.5])     # [0.776, 0.093]  — P(purchase) at each price
-model.price_elasticity([1.0, 2.5])  # [-0.53, -5.33]  — demand grows more elastic as price rises
+model.predict_proba([1.0, 2.5])     # [0.776, 0.092]  — P(purchase) at each price
+model.price_elasticity([1.0, 2.5])  # [-0.53, -5.34]  — demand grows more elastic as price rises
 ```
 
 **Not trusting a coefficient just because it fit — quantifying uncertainty**
 ```python
-from src.customer_segmentation import BrandChoiceModel, load_purchase_data
+from customer_segmentation import BrandChoiceModel, load_purchase_data
 
 df = load_purchase_data()
 occasions = df[df["Incidence"] == 1]
 brand_model = BrandChoiceModel().fit(occasions)
 
-est = brand_model.bootstrap_own_price_significance(brand=3, purchase_occasions=occasions)
+est = brand_model.bootstrap_own_price_significance(brand=3, purchase_occasions=occasions, random_state=0)
 est.mean, est.ci_low, est.ci_high, est.is_significant
-# (0.43, -0.29, 1.33, False)  — the CI crosses zero, so this brand's
+# (0.40, -0.52, 1.26, False)  — the CI crosses zero, so this brand's
 # apparent positive price coefficient can't actually be trusted
 ```
 
@@ -376,7 +392,7 @@ pytest tests/ -v
 
 ## Technologies
 
-`Python 3.10+` · `scikit-learn` · `pandas` · `numpy` · `matplotlib` · `seaborn` · `JupyterLab` · `pytest` · `uv`
+`Python 3.10+` · `scikit-learn` · `pandas` · `numpy` · `matplotlib` · `seaborn` · `JupyterLab` · `pytest` · `uv` · `GitHub Actions` (tests on Python 3.10 and 3.13)
 
 ---
 

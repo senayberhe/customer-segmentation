@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.customer_segmentation.purchase_behavior import PRICE_COLUMNS, PROMOTION_COLUMNS
+from customer_segmentation.purchase_behavior import PRICE_COLUMNS, PROMOTION_COLUMNS
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.customer_segmentation.purchase_behavior import (
+from customer_segmentation.purchase_behavior import (
     BrandChoiceModel,
     CoefficientEstimate,
     PurchasePropensityModel,

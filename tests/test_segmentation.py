@@ -4,12 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.customer_segmentation.data_loader import (
+from customer_segmentation.data_loader import (
     SEGMENTATION_FEATURES,
     load_segmentation_data,
     load_purchase_data,
 )
-from src.customer_segmentation.segmentation import SegmentationPipeline
+from customer_segmentation.segmentation import SegmentationPipeline
 
 
 # ---------------------------------------------------------------------------

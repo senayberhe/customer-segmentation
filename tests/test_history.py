@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.customer_segmentation.evaluation import cross_validate_by_customer
-from src.customer_segmentation.history import HISTORY_COLUMNS, add_purchase_history
-from src.customer_segmentation.purchase_behavior import (
+from customer_segmentation.evaluation import cross_validate_by_customer
+from customer_segmentation.history import HISTORY_COLUMNS, add_purchase_history
+from customer_segmentation.purchase_behavior import (
     PRICE_COLUMNS,
     PROMOTION_COLUMNS,
     BrandChoiceModel,

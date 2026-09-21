@@ -5,21 +5,21 @@ import pandas as pd
 import pytest
 from sklearn.metrics import adjusted_rand_score
 
-from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
-from src.customer_segmentation.evaluation import cross_validate_by_customer
-from src.customer_segmentation.purchase_behavior import (
+from customer_segmentation.data_loader import SEGMENTATION_FEATURES
+from customer_segmentation.evaluation import cross_validate_by_customer
+from customer_segmentation.purchase_behavior import (
     PRICE_COLUMNS,
     PROMOTION_COLUMNS,
     BrandChoiceModel,
     PurchasePropensityModel,
 )
-from src.customer_segmentation.segment_behavior import (
+from customer_segmentation.segment_behavior import (
     METRICS,
     assign_segments,
     brand_shares_by_segment,
     segment_price_response,
 )
-from src.customer_segmentation.segmentation import SegmentationPipeline
+from customer_segmentation.segmentation import SegmentationPipeline
 
 # Price slope of purchase probability per segment: 0 steep ... 3 flat.
 SLOPES = {0: -12.0, 1: -6.0, 2: -3.0, 3: -0.5}

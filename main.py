@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.customer_segmentation import (
+from customer_segmentation import (
     BrandChoiceModel,
     PurchasePropensityModel,
     PurchaseQuantityModel,
@@ -10,15 +10,15 @@ from src.customer_segmentation import (
     load_purchase_data,
     load_segmentation_data,
 )
-from src.customer_segmentation.data_loader import SEGMENTATION_FEATURES
-from src.customer_segmentation.evaluation import cross_validate_by_customer
-from src.customer_segmentation.history import add_purchase_history
-from src.customer_segmentation.segment_behavior import (
+from customer_segmentation.data_loader import SEGMENTATION_FEATURES
+from customer_segmentation.evaluation import cross_validate_by_customer
+from customer_segmentation.history import add_purchase_history
+from customer_segmentation.segment_behavior import (
     assign_segments,
     brand_shares_by_segment,
     segment_price_response,
 )
-from src.customer_segmentation.segmentation import SEGMENT_NAMES
+from customer_segmentation.segmentation import SEGMENT_NAMES
 
 
 def run_segmentation() -> None:

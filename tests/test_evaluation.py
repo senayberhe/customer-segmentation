@@ -4,17 +4,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.customer_segmentation.evaluation import (
+from customer_segmentation.evaluation import (
     Evaluation,
     cross_validate_by_customer,
     split_by_customer,
 )
-from src.customer_segmentation.purchase_behavior import (
+from customer_segmentation.purchase_behavior import (
     BrandChoiceModel,
     PurchasePropensityModel,
     PurchaseQuantityModel,
 )
-from src.customer_segmentation.segmentation import SegmentationPipeline
+from customer_segmentation.segmentation import SegmentationPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +79,18 @@ class TestCrossValidateByCustomer:
         cross_validate_by_customer(_SpyModel, purchase_df, n_splits=5)
         tested = [i for ids in _SpyModel.test_ids for i in ids]
         assert sorted(tested) == sorted(purchase_df["ID"].unique())
+
+    def test_folds_are_reproducible_for_a_seed(self, purchase_df):
+        cross_validate_by_customer(_SpyModel, purchase_df, n_splits=4, random_state=3)
+        first = [sorted(ids) for ids in _SpyModel.test_ids]
+        _SpyModel.fit_ids, _SpyModel.test_ids, _SpyModel.fit_incidence = [], [], []
+        cross_validate_by_customer(_SpyModel, purchase_df, n_splits=4, random_state=3)
+        assert [sorted(ids) for ids in _SpyModel.test_ids] == first
+
+    def test_folds_are_not_dealt_out_in_id_order(self, purchase_df):
+        """Unshuffled GroupKFold would put IDs 0,4,8,... in one fold."""
+        cross_validate_by_customer(_SpyModel, purchase_df, n_splits=4)
+        assert not all(len({i % 4 for i in ids}) == 1 for ids in _SpyModel.test_ids)
 
     def test_occasions_only_drops_non_purchases(self, purchase_df):
         cross_validate_by_customer(_SpyModel, purchase_df, n_splits=3, occasions_only=True)
