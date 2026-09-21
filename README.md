@@ -31,6 +31,12 @@ The project combines two pipelines built from raw retail data:
 
 ---
 
+## Data
+
+The datasets in `data/` (customer demographics and purchase transactions for five anonymised brands) and `audiobooks/data/` come from [365 Data Science](https://365datascience.com/) course material. The data is the starting point; the package, held-out evaluation, cluster validation, segment analysis, purchase-history features, tests and CI are built on top of it.
+
+---
+
 ## Results
 
 | Metric | Value |
